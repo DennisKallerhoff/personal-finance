@@ -532,9 +532,9 @@ const { data, error } = await supabase
   .insert({
     account_id: accountId,
     date: '2025-01-15',
-    amount: -4599,  // cents
+    amount: 4599,  // cents (always positive)
     raw_vendor: 'EDEKA',
-    direction: 'debit'
+    direction: 'debit'  // debit = money out
   })
   .select()
   .single()

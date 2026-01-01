@@ -4,6 +4,18 @@ Patterns for extracting transactions from bank PDFs.
 
 ---
 
+## Amount Convention
+
+**Database storage:**
+- `amount`: Always positive integer (cents)
+- `direction`: `'debit'` (money out) or `'credit'` (money in)
+
+**Parsing functions** return positive amounts. The sign from the PDF determines `direction`, not the amount value.
+
+**Display** may use signed values (negative for expenses) computed from `amount` and `direction`.
+
+---
+
 ## Supported Formats
 
 | Bank | Document Type | Parser |
@@ -113,8 +125,8 @@ Skip these lines (not transactions):
   type: "Lastschrift",
   raw_vendor: "ALTE LEIPZIGER BAUSPAR AG",
   description: "00006919254 DEZEMBER 2017VERTRAG: 0 248651201",
-  amount: -48455,  // cents
-  direction: "debit",
+  amount: 48455,  // cents (always positive)
+  direction: "debit",  // debit = money out, credit = money in
   metadata: {
     mandat: "000000019455825",
     referenz: "0000069192540"
@@ -255,8 +267,8 @@ Some transactions span multiple lines (e.g., flights):
   raw_vendor: "EDEKA MARTENS, Ammersbek",
   normalized_vendor: "Edeka",
   location: "Ammersbek",
-  amount: -4205,  // cents
-  direction: "debit"
+  amount: 4205,  // cents (always positive)
+  direction: "debit"  // debit = money out
 }
 ```
 

@@ -369,9 +369,14 @@ const formatDate = (date: Date): string => {
 ### Amount Component
 
 ```typescript
+// Convert database amount + direction to signed display value
+function toSignedAmount(amount: number, direction: 'debit' | 'credit'): number {
+  return direction === 'debit' ? -amount : amount
+}
+
 // Reusable amount display with color
 interface AmountProps {
-  cents: number
+  cents: number  // Signed value (negative = expense)
   showSign?: boolean
 }
 
@@ -386,6 +391,9 @@ export function Amount({ cents, showSign = false }: AmountProps) {
     </span>
   )
 }
+
+// Usage with database record
+<Amount cents={toSignedAmount(tx.amount, tx.direction)} />
 ```
 
 ---

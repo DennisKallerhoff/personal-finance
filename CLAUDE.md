@@ -27,6 +27,7 @@ A personal finance consolidation app for household spending visibility.
 - `.claude/rules/coding-laws.md` — Core development principles
 - `.claude/rules/supabase-patterns.md` — Supabase/Postgres/Edge Function patterns
 - `.claude/rules/pdf-parsing.md` — PDF extraction patterns (ING, credit card)
+- `.claude/rules/frontend-patterns.md` — React/TypeScript patterns and anti-patterns
 
 ---
 
@@ -312,7 +313,8 @@ haushaltsbuch/
 │   └── rules/
 │       ├── coding-laws.md
 │       ├── supabase-patterns.md
-│       └── pdf-parsing.md
+│       ├── pdf-parsing.md
+│       └── frontend-patterns.md
 ├── supabase/
 │   ├── config.toml
 │   ├── migrations/
