@@ -7,6 +7,31 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useAuth } from '@/hooks/use-auth'
 
+// Validate redirect path to prevent open redirect attacks
+function isValidRedirect(path: string): boolean {
+  if (!path.startsWith('/')) return false
+  if (path.startsWith('//')) return false
+  if (path.match(/^[/\\]*[a-z]+:/i)) return false
+  return true
+}
+
+// Sanitize Supabase errors to avoid exposing system info
+function sanitizeAuthError(message: string): string {
+  if (message.includes('Invalid login credentials')) {
+    return 'Invalid email or password'
+  }
+  if (message.includes('Email not confirmed')) {
+    return 'Please confirm your email address'
+  }
+  if (message.includes('rate limit')) {
+    return 'Too many attempts. Please try again later.'
+  }
+  if (message.includes('already registered')) {
+    return 'An account with this email already exists'
+  }
+  return 'Unable to sign in. Please try again.'
+}
+
 export default function Login() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -18,14 +43,16 @@ export default function Login() {
   const location = useLocation()
   const { user } = useAuth()
 
-  const from = location.state?.from?.pathname || '/'
+  // Validate and sanitize redirect path
+  const requestedPath = location.state?.from?.pathname || '/'
+  const redirectTo = isValidRedirect(requestedPath) ? requestedPath : '/'
 
   // Redirect if already logged in
   useEffect(() => {
     if (user) {
-      navigate(from, { replace: true })
+      navigate(redirectTo, { replace: true })
     }
-  }, [user, navigate, from])
+  }, [user, navigate, redirectTo])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -37,15 +64,19 @@ export default function Login() {
       : await supabase.auth.signInWithPassword({ email, password })
 
     if (error) {
-      setError(error.message)
+      setError(sanitizeAuthError(error.message))
       setLoading(false)
     } else {
-      navigate(from, { replace: true })
+      navigate(redirectTo, { replace: true })
     }
   }
 
   if (user) {
-    return null
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+      </div>
+    )
   }
 
   return (
@@ -61,6 +92,7 @@ export default function Login() {
               <Input
                 id="email"
                 type="email"
+                autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required

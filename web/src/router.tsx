@@ -1,11 +1,24 @@
+import { lazy, Suspense } from 'react'
 import { createBrowserRouter, Navigate } from 'react-router'
 import { ProtectedRoute } from '@/components/protected-route'
 import { Layout } from '@/components/layout'
+
+// Eager load login (needed for unauthenticated users)
 import Login from '@/pages/login'
-import Home from '@/pages/home'
-import Transactions from '@/pages/transactions'
-import Import from '@/pages/import'
-import Settings from '@/pages/settings'
+
+// Lazy load protected routes for code splitting
+const Home = lazy(() => import('@/pages/home'))
+const Transactions = lazy(() => import('@/pages/transactions'))
+const Import = lazy(() => import('@/pages/import'))
+const Settings = lazy(() => import('@/pages/settings'))
+
+function PageLoader() {
+  return (
+    <div className="flex h-64 items-center justify-center">
+      <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+    </div>
+  )
+}
 
 export const router = createBrowserRouter([
   {
@@ -18,10 +31,38 @@ export const router = createBrowserRouter([
       {
         element: <Layout />,
         children: [
-          { path: '/', element: <Home /> },
-          { path: '/transactions', element: <Transactions /> },
-          { path: '/import', element: <Import /> },
-          { path: '/settings', element: <Settings /> },
+          {
+            path: '/',
+            element: (
+              <Suspense fallback={<PageLoader />}>
+                <Home />
+              </Suspense>
+            ),
+          },
+          {
+            path: '/transactions',
+            element: (
+              <Suspense fallback={<PageLoader />}>
+                <Transactions />
+              </Suspense>
+            ),
+          },
+          {
+            path: '/import',
+            element: (
+              <Suspense fallback={<PageLoader />}>
+                <Import />
+              </Suspense>
+            ),
+          },
+          {
+            path: '/settings',
+            element: (
+              <Suspense fallback={<PageLoader />}>
+                <Settings />
+              </Suspense>
+            ),
+          },
         ],
       },
     ],
