@@ -71,6 +71,7 @@ export default function Login() {
               <Input
                 id="password"
                 type="password"
+                autoComplete={isSignUp ? 'new-password' : 'current-password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
