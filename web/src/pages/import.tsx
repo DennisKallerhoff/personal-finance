@@ -3,6 +3,7 @@ import { Upload, AlertTriangle, CheckCircle } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { supabase, type Account, type TransactionInsert } from '@/lib/supabase'
+import { useAuth } from '@/hooks/use-auth'
 
 // Mock data - will be replaced with real data from Supabase
 const MOCK_IMPORTS = [
@@ -167,6 +168,7 @@ interface ParseResult {
 }
 
 export default function Import() {
+  const { user } = useAuth()
   const [showReport, setShowReport] = useState(true)
   const [accounts, setAccounts] = useState<Account[]>([])
   const [selectedAccountId, setSelectedAccountId] = useState<string>('')
@@ -198,6 +200,11 @@ export default function Import() {
     const file = files[0]
     if (!file) return
 
+    if (!user) {
+      setError('You must be logged in to import files')
+      return
+    }
+
     if (!selectedAccountId) {
       setError('Please select an account first')
       return
@@ -226,14 +233,18 @@ export default function Import() {
       const formData = new FormData()
       formData.append('file', file)
 
-      const { data: session } = await supabase.auth.getSession()
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession()
+
+      if (sessionError || !session) {
+        throw new Error('You must be logged in to import files')
+      }
 
       const response = await fetch(
         `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/import-pdf`,
         {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${session.session?.access_token}`,
+            'Authorization': `Bearer ${session.access_token}`,
           },
           body: formData,
         }

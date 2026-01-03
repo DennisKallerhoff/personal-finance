@@ -1,0 +1,65 @@
+# Automatically deploy Supabase Edge Functions on push to main
+#
+# Setup Instructions:
+# 1. Get your Supabase Project ID:
+#    - Go to https://supabase.com/dashboard/project/<your-project>/settings/general
+#    - Copy the "Reference ID"
+#
+# 2. Generate a Supabase Access Token:
+#    - Go to https://supabase.com/dashboard/account/tokens
+#    - Click "Generate New Token"
+#    - Give it a name (e.g., "GitHub Actions")
+#    - Copy the token immediately (you won't see it again)
+#
+# 3. Add GitHub Secrets:
+#    - Go to your GitHub repo > Settings > Secrets and variables > Actions
+#    - Click "New repository secret"
+#    - Add two secrets:
+#      * SUPABASE_PROJECT_ID (the Reference ID from step 1)
+#      * SUPABASE_ACCESS_TOKEN (the token from step 2)
+#
+# 4. Push changes to main
+#    - Edge Functions will auto-deploy whenever files in supabase/functions/ change
+#
+# Manual Deployment:
+# - Go to Actions tab > "Deploy Edge Functions" > "Run workflow"
+
+name: Deploy Edge Functions
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'supabase/functions/**'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Deploy Edge Functions
+        run: |
+          # Link to Supabase project
+          supabase link --project-ref ${{ secrets.SUPABASE_PROJECT_ID }}
+
+          # Deploy all functions
+          supabase functions deploy --use-api
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+
+      - name: Deployment Summary
+        run: |
+          echo "✅ Edge Functions deployed successfully"
+          echo "Project: ${{ secrets.SUPABASE_PROJECT_ID }}"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Commit: ${{ github.sha }}"
