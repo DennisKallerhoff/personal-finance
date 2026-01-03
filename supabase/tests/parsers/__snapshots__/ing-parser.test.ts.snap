@@ -1,0 +1,36 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`parseING > matches snapshot 1`] = `
+[
+  {
+    "amount": 48455,
+    "date": "2017-12-01",
+    "description": "01.12.2017 00006919254 DEZEMBER 2017VERTRAG: 0 248651201",
+    "direction": "debit",
+    "metadata": {
+      "mandat": "000000019455825",
+      "referenz": "0000069192540",
+    },
+    "raw_vendor": "ALTE LEIPZIGER BAUSPAR AG",
+    "type": "Lastschrift",
+  },
+  {
+    "amount": 320000,
+    "date": "2017-12-04",
+    "description": "04.12.2017 Gehalt Dezember",
+    "direction": "credit",
+    "metadata": {},
+    "raw_vendor": "EMPLOYER GMBH",
+    "type": "Gutschrift",
+  },
+  {
+    "amount": 4520,
+    "date": "2017-12-05",
+    "description": "05.12.2017 Einkauf",
+    "direction": "debit",
+    "metadata": {},
+    "raw_vendor": "REWE MARKT GMBH",
+    "type": "Lastschrift",
+  },
+]
+`;

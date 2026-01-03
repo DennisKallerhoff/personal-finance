@@ -1,0 +1,46 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`parseDKB > matches snapshot 1`] = `
+[
+  {
+    "amount": 4205,
+    "date": "2024-01-02",
+    "description": "Ammersbek",
+    "direction": "debit",
+    "metadata": {
+      "receipt_date": "2023-12-29",
+    },
+    "raw_vendor": "EDEKA MARTENS, Ammersbek",
+  },
+  {
+    "amount": 999,
+    "date": "2024-01-03",
+    "description": "SPOTIFY",
+    "direction": "debit",
+    "metadata": {
+      "receipt_date": "2023-12-30",
+    },
+    "raw_vendor": "PAYPAL *SPOTIFY, 35314369001",
+  },
+  {
+    "amount": 128660,
+    "date": "2024-01-15",
+    "description": "Credit card payment",
+    "direction": "credit",
+    "metadata": {
+      "is_transfer": "true",
+    },
+    "raw_vendor": "Lastschrift",
+  },
+  {
+    "amount": 1590,
+    "date": "2024-01-04",
+    "description": "HAMBURG",
+    "direction": "debit",
+    "metadata": {
+      "receipt_date": "2024-01-02",
+    },
+    "raw_vendor": "JIM BLOCK, HAMBURG",
+  },
+]
+`;
