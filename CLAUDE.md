@@ -56,6 +56,25 @@ A personal finance consolidation app for household spending visibility.
 
 ---
 
+## Deployment Automation
+
+**Edge Functions auto-deploy via GitHub Actions:**
+
+- ✅ Automatic deployment when merging PRs to main
+- ✅ Only deploys if `supabase/functions/**` files changed
+- ✅ Manual deployment available via Actions tab
+- ✅ No manual CLI deployment needed
+
+**Setup (one-time):**
+1. Generate Supabase Access Token: https://supabase.com/dashboard/account/tokens
+2. Add GitHub secrets in repo Settings > Secrets and variables > Actions:
+   - `SUPABASE_PROJECT_ID` - Your project reference ID
+   - `SUPABASE_ACCESS_TOKEN` - The token from step 1
+
+**Workflow:** `.github/workflows/deploy-functions.yml`
+
+---
+
 ## Key Documents
 
 ### Product Doctrine
