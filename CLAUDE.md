@@ -18,6 +18,44 @@ A personal finance consolidation app for household spending visibility.
 
 ---
 
+## Git Workflow
+
+**ALWAYS use feature branches and pull requests:**
+
+1. **Create feature branch** from main:
+   ```bash
+   git checkout main
+   git pull origin main
+   git checkout -b feature/description
+   ```
+
+2. **Make changes and commit** following conventional commit format
+
+3. **Push to origin**:
+   ```bash
+   git push -u origin feature/description
+   ```
+
+4. **Create Pull Request** using `gh pr create`:
+   ```bash
+   gh pr create --title "feat: Description" --body "$(cat <<'EOF'
+   ## Summary
+   - What was built
+   - Why it was needed
+
+   ## Testing
+   - Tests added/modified
+   - Manual testing performed
+
+   🤖 Generated with [Claude Code](https://claude.com/claude-code)
+   EOF
+   )"
+   ```
+
+5. **Never push directly to main** — All changes must go through PRs
+
+---
+
 ## Key Documents
 
 ### Product Doctrine
