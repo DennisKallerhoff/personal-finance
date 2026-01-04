@@ -1,51 +1,16 @@
 import { useState, useRef, useEffect } from 'react'
-import { Upload, AlertTriangle, CheckCircle } from 'lucide-react'
+import { Upload, AlertTriangle, CheckCircle, Trash2 } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { supabase, type Account, type TransactionInsert } from '@/lib/supabase'
+import { supabase, type Account, type TransactionInsert, type ImportJob } from '@/lib/supabase'
 import { useAuth } from '@/hooks/use-auth'
 
-// Mock data - will be replaced with real data from Supabase
-const MOCK_IMPORTS = [
-  {
-    id: '1',
-    date: 'Oct 31, 10:30 AM',
-    filename: 'ING_Account_Oct23.pdf',
-    account: 'ING Main',
-    type: 'PDF',
-    txns: 45,
-    status: 'success' as const,
-  },
-  {
-    id: '2',
-    date: 'Oct 30, 09:15 AM',
-    filename: 'Visa_Statement_Oct23.pdf',
-    account: 'Credit Card',
-    type: 'PDF',
-    txns: 22,
-    status: 'partial' as const,
-    warningCount: 2,
-  },
-  {
-    id: '3',
-    date: 'Sep 30, 11:00 AM',
-    filename: 'old_export.csv',
-    account: 'ING Main',
-    type: 'CSV',
-    txns: 150,
-    status: 'success' as const,
-  },
-]
-
-const MOCK_REPORT = {
-  filename: 'Visa_Statement_Oct23.pdf',
-  pagesParsed: 3,
-  rawLines: 128,
-  validTransactions: 22,
-  warnings: [
-    'Page 2: Date parsing ambiguity on line 45 ("2023-10-??"). Manual review required.',
-    'Page 3: Vendor name missing for transaction amount € 12.50. Defaulted to "Unknown Vendor".',
-  ],
+// Compute SHA-256 hash of file for duplicate detection
+async function computeFileHash(file: File): Promise<string> {
+  const buffer = await file.arrayBuffer()
+  const hashBuffer = await crypto.subtle.digest('SHA-256', buffer)
+  const hashArray = Array.from(new Uint8Array(hashBuffer))
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
 }
 
 function DropZone({ onFilesSelected }: { onFilesSelected: (files: FileList) => void }) {
@@ -97,7 +62,7 @@ function DropZone({ onFilesSelected }: { onFilesSelected: (files: FileList) => v
         strokeWidth={1.5}
       />
       <p className="font-heading font-bold text-xl text-primary m-0">
-        Drag & Drop PDF or CSV files here
+        Drag & Drop PDF files here
       </p>
       <p className="text-muted-foreground mt-3 m-0">
         or click to browse files
@@ -105,8 +70,7 @@ function DropZone({ onFilesSelected }: { onFilesSelected: (files: FileList) => v
       <input
         ref={fileInputRef}
         type="file"
-        multiple
-        accept=".pdf,.csv"
+        accept=".pdf"
         className="hidden"
         onChange={(e) => e.target.files && onFilesSelected(e.target.files)}
       />
@@ -114,32 +78,31 @@ function DropZone({ onFilesSelected }: { onFilesSelected: (files: FileList) => v
   )
 }
 
-function StatusBadge({ status, warningCount }: { status: 'success' | 'partial' | 'error'; warningCount?: number }) {
-  if (status === 'success') {
+function StatusBadge({ status }: { status: string }) {
+  if (status === 'completed') {
     return (
       <span className="inline-flex text-xs font-bold uppercase tracking-wider px-3 py-1 rounded-full bg-[var(--success-light)] text-[#166534]">
         Success
       </span>
     )
   }
-  if (status === 'partial') {
+  if (status === 'processing') {
     return (
       <span className="inline-flex text-xs font-bold uppercase tracking-wider px-3 py-1 rounded-full bg-[var(--warning-light)] text-[#92400e]">
-        Partial
+        Processing
+      </span>
+    )
+  }
+  if (status === 'failed') {
+    return (
+      <span className="inline-flex text-xs font-bold uppercase tracking-wider px-3 py-1 rounded-full bg-[var(--destructive-light)] text-[#991b1b]">
+        Failed
       </span>
     )
   }
   return (
-    <span className="inline-flex text-xs font-bold uppercase tracking-wider px-3 py-1 rounded-full bg-[var(--destructive-light)] text-[#991b1b]">
-      Error
-    </span>
-  )
-}
-
-function TypeBadge({ type }: { type: string }) {
-  return (
     <span className="inline-flex text-xs font-bold uppercase tracking-wider px-3 py-1 rounded-full bg-muted text-muted-foreground">
-      {type}
+      {status}
     </span>
   )
 }
@@ -167,34 +130,68 @@ interface ParseResult {
   error?: string
 }
 
+interface ImportJobWithAccount extends ImportJob {
+  accounts?: { name: string } | null
+}
+
+// Format date for display
+function formatDate(dateStr: string): string {
+  const date = new Date(dateStr)
+  return date.toLocaleDateString('de-DE', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+}
+
 export default function Import() {
   const { user } = useAuth()
-  const [showReport, setShowReport] = useState(true)
   const [accounts, setAccounts] = useState<Account[]>([])
   const [selectedAccountId, setSelectedAccountId] = useState<string>('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [parseResult, setParseResult] = useState<ParseResult | null>(null)
   const [importSuccess, setImportSuccess] = useState(false)
+  const [importHistory, setImportHistory] = useState<ImportJobWithAccount[]>([])
+  const [selectedImport, setSelectedImport] = useState<ImportJobWithAccount | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
 
-  // Fetch accounts on mount
+  // Fetch accounts and import history on mount
   useEffect(() => {
-    const fetchAccounts = async () => {
-      const { data, error } = await supabase
+    const fetchData = async () => {
+      // Fetch accounts
+      const { data: accountsData } = await supabase
         .from('accounts')
         .select('*')
         .eq('is_active', true)
         .order('name')
 
-      if (data && !error) {
-        setAccounts(data)
-        if (data.length > 0) {
-          setSelectedAccountId(data[0].id)
+      if (accountsData) {
+        setAccounts(accountsData)
+        if (accountsData.length > 0) {
+          setSelectedAccountId(accountsData[0].id)
         }
       }
+
+      // Fetch import history
+      await fetchImportHistory()
     }
-    fetchAccounts()
+    fetchData()
   }, [])
+
+  const fetchImportHistory = async () => {
+    const { data } = await supabase
+      .from('import_jobs')
+      .select('*, accounts(name)')
+      .order('created_at', { ascending: false })
+      .limit(20)
+
+    if (data) {
+      setImportHistory(data as ImportJobWithAccount[])
+    }
+  }
 
   const handleFilesSelected = async (files: FileList) => {
     const file = files[0]
@@ -229,6 +226,21 @@ export default function Import() {
     setImportSuccess(false)
 
     try {
+      // Check for duplicate file before uploading
+      const fileHash = await computeFileHash(file)
+      const { data: existingImport } = await supabase
+        .from('import_jobs')
+        .select('id, filename, created_at')
+        .eq('file_hash', fileHash)
+        .single()
+
+      if (existingImport) {
+        const importDate = new Date(existingImport.created_at || '').toLocaleDateString('de-DE')
+        setError(`This file was already imported on ${importDate} as "${existingImport.filename}". Skipping duplicate upload.`)
+        setLoading(false)
+        return
+      }
+
       // Upload to Edge Function
       const formData = new FormData()
       formData.append('file', file)
@@ -258,10 +270,12 @@ export default function Import() {
 
       setParseResult(result)
 
-      // Auto-save transactions to database
+      // Auto-save transactions to database (reuse fileHash computed earlier)
       if (result.transactions && result.transactions.length > 0) {
-        await saveTransactions(result.transactions, file.name)
+        await saveTransactions(result.transactions, file.name, fileHash, result.warnings || [])
         setImportSuccess(true)
+        // Refresh import history
+        await fetchImportHistory()
       }
 
     } catch (e) {
@@ -271,18 +285,23 @@ export default function Import() {
     }
   }
 
-  const saveTransactions = async (transactions: ParsedTransaction[], filename: string) => {
+  const saveTransactions = async (
+    transactions: ParsedTransaction[],
+    filename: string,
+    fileHash: string,
+    warnings: Array<{ line: number; message: string; raw: string }>
+  ) => {
     // Create import job
     const { data: importJob, error: jobError } = await supabase
       .from('import_jobs')
       .insert({
         filename,
         account_id: selectedAccountId,
-        status: 'completed',
+        status: warnings.length > 0 ? 'completed' : 'completed',
         transactions_count: transactions.length,
-        file_hash: '', // TODO: Compute file hash
+        file_hash: fileHash,
         errors: [],
-        warnings: parseResult?.warnings || []
+        warnings: warnings
       })
       .select()
       .single()
@@ -298,10 +317,9 @@ export default function Import() {
       direction: tx.direction,
       raw_vendor: tx.raw_vendor,
       description: tx.description,
-      // Category classification will be handled in Phase 4
       category_id: null,
       confidence: null,
-      is_transfer: false,
+      is_transfer: tx.metadata?.is_transfer === 'true',
       is_reviewed: false,
     }))
 
@@ -310,6 +328,41 @@ export default function Import() {
       .insert(transactionsToInsert)
 
     if (txError) throw txError
+  }
+
+  const handleDeleteImport = async (importId: string) => {
+    if (!confirm('Delete this import and all associated transactions?')) {
+      return
+    }
+
+    setDeletingId(importId)
+    setError(null)
+
+    try {
+      // Delete transactions first (they have FK to import_jobs)
+      const { error: txError } = await supabase
+        .from('transactions')
+        .delete()
+        .eq('import_job_id', importId)
+
+      if (txError) throw txError
+
+      // Delete import job
+      const { error: jobError } = await supabase
+        .from('import_jobs')
+        .delete()
+        .eq('id', importId)
+
+      if (jobError) throw jobError
+
+      // Refresh history
+      await fetchImportHistory()
+      setSelectedImport(null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to delete import')
+    } finally {
+      setDeletingId(null)
+    }
   }
 
   return (
@@ -434,135 +487,178 @@ export default function Import() {
           <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-5">
             Import History
           </h3>
-          <table className="w-full">
-            <thead>
-              <tr>
-                <th className="text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground pb-4 border-b-2 border-border">
-                  Date
-                </th>
-                <th className="text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground pb-4 border-b-2 border-border">
-                  Filename
-                </th>
-                <th className="text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground pb-4 border-b-2 border-border">
-                  Account
-                </th>
-                <th className="text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground pb-4 border-b-2 border-border">
-                  Type
-                </th>
-                <th className="text-right text-xs font-semibold uppercase tracking-wider text-muted-foreground pb-4 border-b-2 border-border">
-                  Txns
-                </th>
-                <th className="text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground pb-4 border-b-2 border-border">
-                  Status
-                </th>
-                <th className="text-right text-xs font-semibold uppercase tracking-wider text-muted-foreground pb-4 border-b-2 border-border">
-                  Actions
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {MOCK_IMPORTS.map((imp) => (
-                <tr
-                  key={imp.id}
-                  className={`hover:bg-[#fafafa] ${imp.status === 'partial' ? 'bg-[var(--warning-light)]' : ''}`}
-                >
-                  <td className="py-4 border-b border-border font-medium">{imp.date}</td>
-                  <td className="py-4 border-b border-border font-semibold">{imp.filename}</td>
-                  <td className="py-4 border-b border-border">{imp.account}</td>
-                  <td className="py-4 border-b border-border">
-                    <TypeBadge type={imp.type} />
-                  </td>
-                  <td className="py-4 border-b border-border text-right font-heading font-semibold">
-                    {imp.txns}
-                  </td>
-                  <td className="py-4 border-b border-border">
-                    <StatusBadge status={imp.status} warningCount={imp.warningCount} />
-                  </td>
-                  <td className="py-4 border-b border-border text-right">
-                    <div className="flex gap-2 justify-end">
-                      {imp.status === 'partial' ? (
-                        <>
-                          <Button size="sm">
-                            Review ({imp.warningCount})
-                          </Button>
-                          <Button variant="outline" size="sm">
-                            Reprocess
-                          </Button>
-                        </>
-                      ) : (
-                        <>
-                          <Button variant="outline" size="sm">
-                            Details
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="text-destructive border-[var(--destructive-light)] hover:bg-[var(--destructive-light)]"
-                          >
-                            Delete
-                          </Button>
-                        </>
-                      )}
-                    </div>
-                  </td>
+          {importHistory.length === 0 ? (
+            <p className="text-muted-foreground text-center py-8">
+              No imports yet. Upload a PDF to get started.
+            </p>
+          ) : (
+            <table className="w-full">
+              <thead>
+                <tr>
+                  <th className="text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground pb-4 border-b-2 border-border">
+                    Date
+                  </th>
+                  <th className="text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground pb-4 border-b-2 border-border">
+                    Filename
+                  </th>
+                  <th className="text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground pb-4 border-b-2 border-border">
+                    Account
+                  </th>
+                  <th className="text-right text-xs font-semibold uppercase tracking-wider text-muted-foreground pb-4 border-b-2 border-border">
+                    Txns
+                  </th>
+                  <th className="text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground pb-4 border-b-2 border-border">
+                    Status
+                  </th>
+                  <th className="text-right text-xs font-semibold uppercase tracking-wider text-muted-foreground pb-4 border-b-2 border-border">
+                    Actions
+                  </th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {importHistory.map((imp) => (
+                  <tr
+                    key={imp.id}
+                    className="hover:bg-[#fafafa]"
+                  >
+                    <td className="py-4 border-b border-border font-medium">
+                      {formatDate(imp.created_at || '')}
+                    </td>
+                    <td className="py-4 border-b border-border font-semibold">{imp.filename}</td>
+                    <td className="py-4 border-b border-border">{imp.accounts?.name || '-'}</td>
+                    <td className="py-4 border-b border-border text-right font-heading font-semibold">
+                      {imp.transactions_count}
+                    </td>
+                    <td className="py-4 border-b border-border">
+                      <StatusBadge status={imp.status} />
+                    </td>
+                    <td className="py-4 border-b border-border text-right">
+                      <div className="flex gap-2 justify-end">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setSelectedImport(imp)}
+                        >
+                          Details
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="text-destructive border-[var(--destructive-light)] hover:bg-[var(--destructive-light)]"
+                          onClick={() => handleDeleteImport(imp.id)}
+                          disabled={deletingId === imp.id}
+                        >
+                          {deletingId === imp.id ? (
+                            <div className="animate-spin h-4 w-4 border-2 border-destructive border-t-transparent rounded-full" />
+                          ) : (
+                            <Trash2 size={16} />
+                          )}
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </CardContent>
       </Card>
 
-      {/* Detailed Import Report */}
-      {showReport && (
-        <Card className="border-l-[6px] border-l-[var(--warning)]">
+      {/* Selected Import Details */}
+      {selectedImport && (
+        <Card className={`border-l-[6px] ${
+          (selectedImport.warnings as any[])?.length > 0
+            ? 'border-l-[var(--warning)]'
+            : 'border-l-[#4CAF50]'
+        }`}>
           <CardContent className="p-6">
             <div className="flex items-center justify-between mb-6">
               <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground m-0">
-                Report: {MOCK_REPORT.filename}
+                Import Details: {selectedImport.filename}
               </h3>
-              <span className="text-sm font-bold px-3 py-1 rounded-full bg-[var(--warning-light)] text-[#92400e]">
-                Completed with Warnings
-              </span>
+              <Button variant="outline" size="sm" onClick={() => setSelectedImport(null)}>
+                Close
+              </Button>
             </div>
 
-            <div className="grid grid-cols-3 gap-4 mb-6">
+            <div className="grid grid-cols-4 gap-4 mb-6">
               <div className="bg-muted rounded-lg p-4">
                 <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Pages Parsed
+                  Status
                 </div>
-                <div className="font-heading font-bold text-2xl mt-1">
-                  {MOCK_REPORT.pagesParsed}
+                <div className="mt-2">
+                  <StatusBadge status={selectedImport.status} />
                 </div>
               </div>
               <div className="bg-muted rounded-lg p-4">
                 <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Raw Lines
+                  Transactions
                 </div>
                 <div className="font-heading font-bold text-2xl mt-1">
-                  {MOCK_REPORT.rawLines}
+                  {selectedImport.transactions_count}
                 </div>
               </div>
               <div className="bg-muted rounded-lg p-4">
                 <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Valid Transactions
+                  Duplicates
                 </div>
                 <div className="font-heading font-bold text-2xl mt-1">
-                  {MOCK_REPORT.validTransactions}
+                  {selectedImport.duplicates_count || 0}
+                </div>
+              </div>
+              <div className="bg-muted rounded-lg p-4">
+                <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  Account
+                </div>
+                <div className="font-heading font-bold text-lg mt-1">
+                  {selectedImport.accounts?.name || '-'}
                 </div>
               </div>
             </div>
 
-            <div className="bg-[var(--warning-light)] rounded-lg p-6">
-              <h4 className="flex items-center gap-2 font-heading font-bold text-[#92400e] m-0 mb-3">
-                <AlertTriangle size={20} />
-                Warnings
-              </h4>
-              <ul className="m-0 pl-6 text-[#92400e] font-medium space-y-2">
-                {MOCK_REPORT.warnings.map((warning, i) => (
-                  <li key={i}>{warning}</li>
-                ))}
-              </ul>
-            </div>
+            {/* Warnings */}
+            {(selectedImport.warnings as any[])?.length > 0 && (
+              <div className="bg-[var(--warning-light)] rounded-lg p-6 mb-4">
+                <h4 className="flex items-center gap-2 font-heading font-bold text-[#92400e] m-0 mb-3">
+                  <AlertTriangle size={20} />
+                  {(selectedImport.warnings as any[]).length} Warning{(selectedImport.warnings as any[]).length > 1 ? 's' : ''}
+                </h4>
+                <ul className="m-0 pl-6 text-[#92400e] font-medium space-y-2 text-sm">
+                  {(selectedImport.warnings as any[]).map((warning: any, i: number) => (
+                    <li key={i}>
+                      {warning.line ? `Line ${warning.line}: ` : ''}{warning.message || String(warning)}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Errors */}
+            {(selectedImport.errors as any[])?.length > 0 && (
+              <div className="bg-[var(--destructive-light)] rounded-lg p-6">
+                <h4 className="flex items-center gap-2 font-heading font-bold text-[#991b1b] m-0 mb-3">
+                  <AlertTriangle size={20} />
+                  {(selectedImport.errors as any[]).length} Error{(selectedImport.errors as any[]).length > 1 ? 's' : ''}
+                </h4>
+                <ul className="m-0 pl-6 text-[#991b1b] font-medium space-y-2 text-sm">
+                  {(selectedImport.errors as any[]).map((error: any, i: number) => (
+                    <li key={i}>{String(error)}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Import Metadata */}
+            {selectedImport.metadata && Object.keys(selectedImport.metadata as object).length > 0 && (
+              <div className="mt-4 p-4 bg-muted rounded-lg">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">
+                  Metadata
+                </h4>
+                <pre className="text-sm text-muted-foreground m-0">
+                  {JSON.stringify(selectedImport.metadata, null, 2)}
+                </pre>
+              </div>
+            )}
           </CardContent>
         </Card>
       )}

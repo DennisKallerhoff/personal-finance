@@ -2,108 +2,122 @@ import { parseGermanAmount } from '../german-numbers.ts';
 import { parseGermanDate, formatISODate } from '../german-dates.ts';
 import type { ParsedTransaction, ParseResult, ParseWarning } from './types.ts';
 
-// DKB uses DD.MM.YY format
-const DATE_PATTERN = /^(\d{2}\.\d{2}\.\d{2})\s+(\d{2}\.\d{2}\.\d{2})/;
-const SINGLE_DATE_PATTERN = /^\s*(\d{2}\.\d{2}\.\d{2})/;
-const AMOUNT_PATTERN = /(\d{1,3}(?:\.\d{3})*,\d{2})\s*([-+])\s*$/;
+// Pattern to match DKB transactions in continuous text (no line breaks)
+// Format: DD.MM.YY DD.MM.YY VENDOR 123,45 - [Prämienmeilen +XX]
+const TRANSACTION_PATTERN = /(\d{2}\.\d{2}\.\d{2})\s+(\d{2}\.\d{2}\.\d{2})\s+(.+?)\s+([\d.]+,\d{2})\s*([-+])/g;
 
-const SKIP_PATTERNS = [
-  'Prämienmeilen',
-  'Übertrag von Seite',
-  'Zwischensumme von Seite',
+// Single date transactions (like "Saldo letzte Abrechnung" or "monatlicher Kartenpreis")
+const SINGLE_DATE_PATTERN = /(\d{2}\.\d{2}\.\d{2})\s+(Saldo letzte Abrechnung|Lastschrift|monatlicher Kartenpreis|Neuer Saldo)\s+([\d.]+,\d{2})\s*([-+])/g;
+
+// Skip these - they're not real transactions
+const SKIP_VENDORS = [
   'Saldo letzte Abrechnung',
   'Neuer Saldo',
-  'Ihre Abrechnung vom',
-  'Datum    Datum',
-  'Beleg    Buchung'
+  'Übertrag von Seite',
+  'Zwischensumme von Seite',
 ];
 
-interface ParserState {
-  inTransaction: boolean;
-  currentTransaction: Partial<ParsedTransaction> | null;
-}
-
 export function parseDKB(text: string): ParseResult {
-  const lines = text.split('\n');
   const transactions: ParsedTransaction[] = [];
   const warnings: ParseWarning[] = [];
 
-  let state: ParserState = {
-    inTransaction: false,
-    currentTransaction: null
-  };
+  // Find all two-date transactions (the main transaction pattern)
+  let match;
+  while ((match = TRANSACTION_PATTERN.exec(text)) !== null) {
+    const [fullMatch, receiptDate, bookingDate, vendorRaw, amountStr, sign] = match;
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const lineNumber = i + 1;
+    // Clean up vendor - remove trailing Prämienmeilen if present
+    let vendor = vendorRaw.trim();
 
-    // Skip known non-transaction lines
-    if (shouldSkipLine(line)) {
+    // Skip non-transaction entries
+    if (SKIP_VENDORS.some(skip => vendor.includes(skip))) {
       continue;
     }
 
-    // Check for transaction with two dates (receipt + booking)
-    const twoDatesMatch = line.match(DATE_PATTERN);
-
-    if (twoDatesMatch) {
-      // Save previous transaction
-      if (state.currentTransaction && isValidTransaction(state.currentTransaction)) {
-        transactions.push(state.currentTransaction as ParsedTransaction);
-      }
-
-      try {
-        state.currentTransaction = parseTwoDateLine(line, lineNumber, warnings);
-        state.inTransaction = true;
-      } catch (e) {
-        warnings.push({
-          line: lineNumber,
-          message: e instanceof Error ? e.message : 'Parse error',
-          raw: line
-        });
-        state.inTransaction = false;
-        state.currentTransaction = null;
-      }
+    // Skip if vendor looks like page header content
+    if (vendor.includes('Kontaktdaten') || vendor.includes('Abrechnungsnummer')) {
       continue;
     }
 
-    // Check for single date transaction (e.g., Lastschrift payment)
-    const singleDateMatch = line.match(SINGLE_DATE_PATTERN);
-    const amountMatch = line.match(AMOUNT_PATTERN);
+    try {
+      const bookingDateParsed = parseGermanDate(bookingDate);
+      const receiptDateParsed = parseGermanDate(receiptDate);
 
-    if (singleDateMatch && amountMatch) {
-      // Save previous transaction
-      if (state.currentTransaction && isValidTransaction(state.currentTransaction)) {
-        transactions.push(state.currentTransaction as ParsedTransaction);
-      }
+      const amount = parseGermanAmount(amountStr);
+      const isCredit = sign === '+';
 
-      try {
-        state.currentTransaction = parseSingleDateLine(line, lineNumber, warnings);
-        state.inTransaction = false;  // Single-line transactions
+      // For credit cards: - means expense (debit), + means refund/payment (credit)
+      const direction: 'debit' | 'credit' = isCredit ? 'credit' : 'debit';
 
-        if (isValidTransaction(state.currentTransaction)) {
-          transactions.push(state.currentTransaction as ParsedTransaction);
-          state.currentTransaction = null;
+      // Check if this is a Lastschrift (credit card payment - internal transfer)
+      const isTransfer = vendor === 'Lastschrift' && isCredit;
+
+      // Extract vendor and location
+      const { vendorName, location } = extractVendorAndLocation(vendor);
+
+      transactions.push({
+        date: formatISODate(bookingDateParsed),
+        amount,
+        direction,
+        raw_vendor: vendor,
+        description: location || '',
+        metadata: {
+          receipt_date: formatISODate(receiptDateParsed),
+          ...(isTransfer ? { is_transfer: 'true' } : {})
         }
-      } catch (e) {
-        warnings.push({
-          line: lineNumber,
-          message: e instanceof Error ? e.message : 'Parse error',
-          raw: line
-        });
-      }
+      });
+    } catch (e) {
+      warnings.push({
+        line: 0,
+        message: e instanceof Error ? e.message : 'Parse error',
+        raw: fullMatch
+      });
+    }
+  }
+
+  // Also find single-date transactions (Lastschrift payments, fees)
+  SINGLE_DATE_PATTERN.lastIndex = 0; // Reset regex
+  while ((match = SINGLE_DATE_PATTERN.exec(text)) !== null) {
+    const [fullMatch, date, type, amountStr, sign] = match;
+
+    // Skip balance entries
+    if (type === 'Saldo letzte Abrechnung' || type === 'Neuer Saldo') {
       continue;
     }
 
-    // Continue multi-line transaction
-    if (state.inTransaction && state.currentTransaction) {
-      parseAdditionalLine(line, state.currentTransaction);
+    try {
+      const dateParsed = parseGermanDate(date);
+      const amount = parseGermanAmount(amountStr);
+      const isCredit = sign === '+';
+      const direction: 'debit' | 'credit' = isCredit ? 'credit' : 'debit';
+
+      // Lastschrift with + is credit card payment (transfer to pay off balance)
+      const isTransfer = type === 'Lastschrift' && isCredit;
+
+      // Skip Lastschrift - it's already captured by two-date pattern
+      if (type === 'Lastschrift') {
+        continue;
+      }
+
+      transactions.push({
+        date: formatISODate(dateParsed),
+        amount,
+        direction,
+        raw_vendor: type,
+        description: type === 'monatlicher Kartenpreis' ? 'Monthly card fee' : type,
+        metadata: isTransfer ? { is_transfer: 'true' } : {}
+      });
+    } catch (e) {
+      warnings.push({
+        line: 0,
+        message: e instanceof Error ? e.message : 'Parse error',
+        raw: fullMatch
+      });
     }
   }
 
-  // Don't forget the last transaction
-  if (state.currentTransaction && isValidTransaction(state.currentTransaction)) {
-    transactions.push(state.currentTransaction as ParsedTransaction);
-  }
+  // Sort by date
+  transactions.sort((a, b) => a.date.localeCompare(b.date));
 
   return {
     transactions,
@@ -111,150 +125,33 @@ export function parseDKB(text: string): ParseResult {
     metadata: {
       bank: 'dkb',
       pages_parsed: 1,
-      raw_lines: lines.length
+      raw_lines: 1 // No line breaks in unpdf output
     }
   };
 }
 
-function shouldSkipLine(line: string): boolean {
-  const trimmed = line.trim();
-  if (!trimmed) return true;
-  return SKIP_PATTERNS.some(pattern => trimmed.includes(pattern));
-}
-
-function parseTwoDateLine(
-  line: string,
-  lineNumber: number,
-  warnings: ParseWarning[]
-): Partial<ParsedTransaction> {
-  const dateMatch = line.match(DATE_PATTERN);
-  const amountMatch = line.match(AMOUNT_PATTERN);
-
-  if (!dateMatch) {
-    throw new Error('No dates found');
-  }
-
-  // Use booking date (second date) as transaction date
-  const bookingDate = parseGermanDate(dateMatch[2]);
-  const dateStr = formatISODate(bookingDate);
-
-  // Extract vendor (between dates and amount)
-  let vendorPart = line.substring(dateMatch[0].length);
-  if (amountMatch) {
-    vendorPart = vendorPart.substring(0, vendorPart.length - amountMatch[0].length).trim();
-  }
-
-  // Parse vendor and location
-  const { vendor, location } = extractDKBVendor(vendorPart);
-
-  // Parse amount
-  let amount = 0;
-  let direction: 'debit' | 'credit' = 'debit';
-
-  if (amountMatch) {
-    const isCredit = amountMatch[2] === '+';
-    amount = parseGermanAmount(amountMatch[1]);
-    direction = isCredit ? 'credit' : 'debit';
-  } else {
-    warnings.push({
-      line: lineNumber,
-      message: 'No amount found',
-      raw: line
-    });
-  }
-
-  return {
-    date: dateStr,
-    amount,
-    direction,
-    raw_vendor: vendorPart,
-    description: location || '',
-    metadata: {
-      receipt_date: formatISODate(parseGermanDate(dateMatch[1]))
-    }
-  };
-}
-
-function parseSingleDateLine(
-  line: string,
-  lineNumber: number,
-  warnings: ParseWarning[]
-): Partial<ParsedTransaction> {
-  const dateMatch = line.match(SINGLE_DATE_PATTERN);
-  const amountMatch = line.match(AMOUNT_PATTERN);
-
-  if (!dateMatch || !amountMatch) {
-    throw new Error('Invalid single date line');
-  }
-
-  const date = parseGermanDate(dateMatch[1]);
-
-  // Extract description between date and amount
-  let description = line.substring(dateMatch[0].length);
-  description = description.substring(0, description.length - amountMatch[0].length).trim();
-
-  const isCredit = amountMatch[2] === '+';
-  const amount = parseGermanAmount(amountMatch[1]);
-
-  // "Lastschrift" with + is a credit card payment (transfer)
-  const isTransfer = description.includes('Lastschrift') && isCredit;
-
-  return {
-    date: formatISODate(date),
-    amount,
-    direction: isCredit ? 'credit' : 'debit',
-    raw_vendor: description,
-    description: isTransfer ? 'Credit card payment' : description,
-    metadata: isTransfer ? { is_transfer: 'true' } : {}
-  };
-}
-
-function extractDKBVendor(text: string): { vendor: string; location?: string } {
+function extractVendorAndLocation(text: string): { vendorName: string; location?: string } {
   const trimmed = text.trim();
 
-  // PayPal special handling
+  // PayPal special handling: "PAYPAL *aichu240600, 35314369001"
   if (trimmed.startsWith('PAYPAL')) {
     const match = trimmed.match(/PAYPAL \*([^,]+)/);
-    return { vendor: 'PayPal', location: match?.[1] };
+    return { vendorName: 'PayPal', location: match?.[1] };
   }
 
-  // Amazon special handling
+  // Amazon special handling: "AMZN Mktp DE*DD3403EV5, 800-279-6620"
   if (trimmed.includes('AMZN') || trimmed.includes('AMAZON')) {
-    return { vendor: 'Amazon' };
+    return { vendorName: 'Amazon' };
   }
 
-  // Standard: "VENDOR, LOCATION"
-  const parts = trimmed.split(',');
-  return {
-    vendor: parts[0]?.trim() || trimmed,
-    location: parts[1]?.trim()
-  };
-}
-
-function parseAdditionalLine(
-  line: string,
-  transaction: Partial<ParsedTransaction>
-): void {
-  const trimmed = line.trim();
-
-  // Skip bonus miles line
-  if (trimmed.includes('Prämienmeilen')) {
-    return;
+  // Standard format: "VENDOR, LOCATION"
+  const commaIndex = trimmed.lastIndexOf(',');
+  if (commaIndex > 0) {
+    return {
+      vendorName: trimmed.substring(0, commaIndex).trim(),
+      location: trimmed.substring(commaIndex + 1).trim()
+    };
   }
 
-  // Append to description
-  if (transaction.description) {
-    transaction.description += ' ' + trimmed;
-  } else {
-    transaction.description = trimmed;
-  }
-}
-
-function isValidTransaction(tx: Partial<ParsedTransaction>): boolean {
-  return !!(
-    tx.date &&
-    tx.amount !== undefined &&
-    tx.direction &&
-    tx.raw_vendor
-  );
+  return { vendorName: trimmed };
 }

@@ -69,7 +69,7 @@ serve(async (req: Request) => {
     // Extract text from PDF
     let text: string;
     try {
-      const result = await extractText(buffer);
+      const result = await extractText(buffer, { mergePages: true });
       text = result.text;
     } catch (e) {
       throw new UpstreamFailError('Failed to extract text from PDF', e as Error);
