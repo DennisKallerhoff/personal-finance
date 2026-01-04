@@ -328,6 +328,63 @@ export default function Import() {
         duplicates_count: result?.duplicate_count || 0
       })
       .eq('id', importJob.id)
+
+    // Classify unknown vendors with LLM
+    await classifyUnknownTransactions(importJob.id)
+  }
+
+  const classifyUnknownTransactions = async (importJobId: string) => {
+    // Fetch transactions with null category_id from this import
+    const { data: unclassified } = await supabase
+      .from('transactions')
+      .select('id, raw_vendor, normalized_vendor, description, amount, direction')
+      .eq('import_job_id', importJobId)
+      .is('category_id', null)
+
+    if (!unclassified || unclassified.length === 0) {
+      return  // All transactions were classified by rules
+    }
+
+    console.log(`Classifying ${unclassified.length} unknown vendors with LLM...`)
+
+    // Get session for auth
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) return
+
+    // Call LLM classifier for each unknown transaction
+    const classificationPromises = unclassified.map(async (tx) => {
+      try {
+        const response = await fetch(
+          `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/classify-transaction`,
+          {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${session.access_token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              transaction_id: tx.id,
+              raw_vendor: tx.raw_vendor,
+              normalized_vendor: tx.normalized_vendor,
+              description: tx.description,
+              amount: tx.amount,
+              direction: tx.direction,
+            }),
+          }
+        )
+
+        const result = await response.json()
+        return result
+      } catch (e) {
+        console.error('LLM classification failed for', tx.normalized_vendor, e)
+        return { success: false }
+      }
+    })
+
+    // Wait for all classifications to complete
+    await Promise.all(classificationPromises)
+
+    console.log('LLM classification complete')
   }
 
   const handleDeleteImport = async (importId: string) => {
