@@ -226,6 +226,21 @@ export default function Import() {
     setImportSuccess(false)
 
     try {
+      // Check for duplicate file before uploading
+      const fileHash = await computeFileHash(file)
+      const { data: existingImport } = await supabase
+        .from('import_jobs')
+        .select('id, filename, created_at')
+        .eq('file_hash', fileHash)
+        .single()
+
+      if (existingImport) {
+        const importDate = new Date(existingImport.created_at || '').toLocaleDateString('de-DE')
+        setError(`This file was already imported on ${importDate} as "${existingImport.filename}". Skipping duplicate upload.`)
+        setLoading(false)
+        return
+      }
+
       // Upload to Edge Function
       const formData = new FormData()
       formData.append('file', file)
@@ -255,10 +270,8 @@ export default function Import() {
 
       setParseResult(result)
 
-      // Auto-save transactions to database
+      // Auto-save transactions to database (reuse fileHash computed earlier)
       if (result.transactions && result.transactions.length > 0) {
-        // Compute file hash for duplicate detection
-        const fileHash = await computeFileHash(file)
         await saveTransactions(result.transactions, file.name, fileHash, result.warnings || [])
         setImportSuccess(true)
         // Refresh import history
