@@ -69,7 +69,7 @@ serve(async (req: Request) => {
     // Extract text from PDF
     let text: string;
     try {
-      const result = await extractText(buffer);
+      const result = await extractText(buffer, { mergePages: true });
       text = result.text;
     } catch (e) {
       throw new UpstreamFailError('Failed to extract text from PDF', e as Error);
@@ -77,6 +77,18 @@ serve(async (req: Request) => {
 
     // Detect bank type if not provided
     const detectedBank = bankType || detectBankType(text, file.name);
+
+    // Debug: Check line structure
+    const lines = text.split('\n');
+    console.log('PDF Debug:', {
+      filename: file.name,
+      textLength: text.length,
+      lineCount: lines.length,
+      detectedBank,
+      first10Lines: lines.slice(0, 10),
+      hasNewlines: text.includes('\n'),
+      textPreview: text.substring(0, 500)
+    });
 
     if (!detectedBank) {
       throw new BadInputError('Could not detect bank type. Please specify bank=ing or bank=dkb');
@@ -93,11 +105,19 @@ serve(async (req: Request) => {
       throw new BadInputError(`Unknown bank type: ${detectedBank}`);
     }
 
+    console.log('Parse result:', {
+      transactionCount: parseResult.transactions.length,
+      warningCount: parseResult.warnings.length
+    });
+
     // Return parsed transactions
     return new Response(
       JSON.stringify({
         success: true,
         filename: file.name,
+        rawTextPreview: text.substring(0, 1000),
+        lineCount: lines.length,
+        first20Lines: lines.slice(0, 20),
         ...parseResult
       }),
       {
