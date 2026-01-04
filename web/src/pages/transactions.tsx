@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { X, MessageSquare, Info } from 'lucide-react'
+import { X, Info, ChevronLeft, ChevronRight } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -178,6 +178,10 @@ export default function Transactions() {
     const now = new Date()
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
   })
+  const [updateError, setUpdateError] = useState<string | null>(null)
+  const [currentPage, setCurrentPage] = useState(1)
+  const [totalCount, setTotalCount] = useState(0)
+  const PAGE_SIZE = 50
 
   // Fetch categories and accounts on mount
   useEffect(() => {
@@ -192,7 +196,12 @@ export default function Transactions() {
     fetchMetadata()
   }, [])
 
-  // Fetch transactions when filters change
+  // Reset page when filters change
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [selectedMonth, selectedCategory, selectedAccount])
+
+  // Fetch transactions when filters or page change
   useEffect(() => {
     const fetchTransactions = async () => {
       setLoading(true)
@@ -202,13 +211,34 @@ export default function Transactions() {
       const startDate = new Date(year, month - 1, 1)
       const endDate = new Date(year, month, 0) // Last day of month
 
+      // Build base query for count
+      let countQuery = supabase
+        .from('transactions')
+        .select('*', { count: 'exact', head: true })
+        .gte('date', startDate.toISOString().split('T')[0])
+        .lte('date', endDate.toISOString().split('T')[0])
+
+      if (selectedCategory) {
+        countQuery = countQuery.eq('category_id', selectedCategory)
+      }
+      if (selectedAccount) {
+        countQuery = countQuery.eq('account_id', selectedAccount)
+      }
+
+      const { count } = await countQuery
+      setTotalCount(count || 0)
+
+      // Build query for data with pagination
+      const from = (currentPage - 1) * PAGE_SIZE
+      const to = from + PAGE_SIZE - 1
+
       let query = supabase
         .from('transactions')
         .select('*, categories(name, color), accounts(name)')
         .gte('date', startDate.toISOString().split('T')[0])
         .lte('date', endDate.toISOString().split('T')[0])
         .order('date', { ascending: false })
-        .limit(200)
+        .range(from, to)
 
       if (selectedCategory) {
         query = query.eq('category_id', selectedCategory)
@@ -230,30 +260,36 @@ export default function Transactions() {
     }
 
     fetchTransactions()
-  }, [selectedMonth, selectedCategory, selectedAccount])
+  }, [selectedMonth, selectedCategory, selectedAccount, currentPage])
 
   // Handle category change
   const handleCategoryChange = async (transactionId: string, categoryId: string) => {
+    setUpdateError(null)
     const { error } = await supabase
       .from('transactions')
       .update({ category_id: categoryId || null, is_reviewed: true })
       .eq('id', transactionId)
 
-    if (!error) {
-      // Update local state
-      setTransactions(prev =>
-        prev.map(t =>
-          t.id === transactionId
-            ? { ...t, category_id: categoryId || null, is_reviewed: true }
-            : t
-        )
+    if (error) {
+      setUpdateError('Failed to update category. Please try again.')
+      // Auto-clear error after 5 seconds
+      setTimeout(() => setUpdateError(null), 5000)
+      return
+    }
+
+    // Update local state
+    setTransactions(prev =>
+      prev.map(t =>
+        t.id === transactionId
+          ? { ...t, category_id: categoryId || null, is_reviewed: true }
+          : t
       )
-      // Update selected transaction if open
-      if (selectedTransaction?.id === transactionId) {
-        setSelectedTransaction(prev =>
-          prev ? { ...prev, category_id: categoryId || null, is_reviewed: true } : null
-        )
-      }
+    )
+    // Update selected transaction if open
+    if (selectedTransaction?.id === transactionId) {
+      setSelectedTransaction(prev =>
+        prev ? { ...prev, category_id: categoryId || null, is_reviewed: true } : null
+      )
     }
   }
 
@@ -313,9 +349,19 @@ export default function Transactions() {
           />
         </div>
 
+        {/* Error Message */}
+        {updateError && (
+          <div className="px-4 py-3 bg-[var(--destructive-light)] border-b-2 border-destructive text-destructive font-medium">
+            {updateError}
+          </div>
+        )}
+
         {/* Summary Row */}
         <div className="px-4 py-3 bg-muted border-b-2 border-border flex justify-between font-heading font-bold text-muted-foreground">
-          <span>Showing {filteredTransactions.length} transactions</span>
+          <span>
+            Showing {filteredTransactions.length} of {totalCount} transactions
+            {totalCount > PAGE_SIZE && ` (Page ${currentPage} of ${Math.ceil(totalCount / PAGE_SIZE)})`}
+          </span>
           <span>Total Expenses: {formatCurrency(-totalExpenses)}</span>
         </div>
 
@@ -411,6 +457,33 @@ export default function Transactions() {
               })}
             </tbody>
           </table>
+        )}
+
+        {/* Pagination Controls */}
+        {totalCount > PAGE_SIZE && !loading && (
+          <div className="px-4 py-4 bg-white border-t-2 border-border flex items-center justify-between">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+            >
+              <ChevronLeft size={16} className="mr-1" />
+              Previous
+            </Button>
+            <span className="text-sm text-muted-foreground">
+              Page {currentPage} of {Math.ceil(totalCount / PAGE_SIZE)}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCurrentPage(p => Math.min(Math.ceil(totalCount / PAGE_SIZE), p + 1))}
+              disabled={currentPage >= Math.ceil(totalCount / PAGE_SIZE)}
+            >
+              Next
+              <ChevronRight size={16} className="ml-1" />
+            </Button>
+          </div>
         )}
       </Card>
 

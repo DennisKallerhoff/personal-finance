@@ -156,6 +156,7 @@ export default function Import() {
   const [importSuccess, setImportSuccess] = useState(false)
   const [importHistory, setImportHistory] = useState<ImportJobWithAccount[]>([])
   const [selectedImport, setSelectedImport] = useState<ImportJobWithAccount | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
 
   // Fetch accounts and import history on mount
   useEffect(() => {
@@ -321,6 +322,9 @@ export default function Import() {
       return
     }
 
+    setDeletingId(importId)
+    setError(null)
+
     try {
       // Delete transactions first (they have FK to import_jobs)
       const { error: txError } = await supabase
@@ -343,6 +347,8 @@ export default function Import() {
       setSelectedImport(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to delete import')
+    } finally {
+      setDeletingId(null)
     }
   }
 
@@ -527,8 +533,13 @@ export default function Import() {
                           size="sm"
                           className="text-destructive border-[var(--destructive-light)] hover:bg-[var(--destructive-light)]"
                           onClick={() => handleDeleteImport(imp.id)}
+                          disabled={deletingId === imp.id}
                         >
-                          <Trash2 size={16} />
+                          {deletingId === imp.id ? (
+                            <div className="animate-spin h-4 w-4 border-2 border-destructive border-t-transparent rounded-full" />
+                          ) : (
+                            <Trash2 size={16} />
+                          )}
                         </Button>
                       </div>
                     </td>
