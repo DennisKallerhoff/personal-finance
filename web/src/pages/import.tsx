@@ -297,8 +297,8 @@ export default function Import() {
       .insert({
         filename,
         account_id: selectedAccountId,
-        status: warnings.length > 0 ? 'completed' : 'completed',
-        transactions_count: transactions.length,
+        status: 'processing',
+        transactions_count: 0,  // Will be updated after processing
         file_hash: fileHash,
         errors: [],
         warnings: warnings
@@ -308,26 +308,26 @@ export default function Import() {
 
     if (jobError) throw jobError
 
-    // Insert transactions
-    const transactionsToInsert: TransactionInsert[] = transactions.map(tx => ({
-      account_id: selectedAccountId,
-      import_job_id: importJob.id,
-      date: tx.date,
-      amount: tx.amount,
-      direction: tx.direction,
-      raw_vendor: tx.raw_vendor,
-      description: tx.description,
-      category_id: null,
-      confidence: null,
-      is_transfer: tx.metadata?.is_transfer === 'true',
-      is_reviewed: false,
-    }))
+    // Process transactions with classification, deduplication, and transfer detection
+    const { data: stats, error: importError } = await supabase
+      .rpc('import_transactions_batch', {
+        p_account_id: selectedAccountId,
+        p_import_job_id: importJob.id,
+        p_transactions: transactions
+      })
 
-    const { error: txError } = await supabase
-      .from('transactions')
-      .insert(transactionsToInsert)
+    if (importError) throw importError
 
-    if (txError) throw txError
+    // Update import job with final statistics
+    const result = stats?.[0]
+    await supabase
+      .from('import_jobs')
+      .update({
+        status: 'completed',
+        transactions_count: result?.inserted_count || 0,
+        duplicates_count: result?.duplicate_count || 0
+      })
+      .eq('id', importJob.id)
   }
 
   const handleDeleteImport = async (importId: string) => {
