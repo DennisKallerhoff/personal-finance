@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { supabase, type Account, type Category, type VendorRule } from '@/lib/supabase'
 
 interface VendorRuleWithCategory extends VendorRule {
@@ -28,6 +31,11 @@ export default function Settings() {
   const [vendorRules, setVendorRules] = useState<VendorRuleWithCategory[]>([])
   const [loading, setLoading] = useState(true)
 
+  // Edit dialog state
+  const [editingAccount, setEditingAccount] = useState<Account | null>(null)
+  const [editingCategory, setEditingCategory] = useState<Category | null>(null)
+  const [editFormData, setEditFormData] = useState<{ name: string; color?: string; icon?: string }>({})
+
   useEffect(() => {
     const fetchData = async () => {
       const [{ data: accs }, { data: cats }, { data: rules }] = await Promise.all([
@@ -46,6 +54,61 @@ export default function Settings() {
   // Build category hierarchy: parent categories with their children
   const parentCategories = categories.filter(c => c.parent_id === null)
   const getChildren = (parentId: string) => categories.filter(c => c.parent_id === parentId)
+
+  // Edit handlers
+  const handleEditAccount = (account: Account) => {
+    setEditingAccount(account)
+    setEditFormData({ name: account.name, color: account.color || '' })
+  }
+
+  const handleEditCategory = (category: Category) => {
+    setEditingCategory(category)
+    setEditFormData({ name: category.name, icon: category.icon || '' })
+  }
+
+  const handleSaveAccount = async () => {
+    if (!editingAccount) return
+
+    const { error } = await supabase
+      .from('accounts')
+      .update({
+        name: editFormData.name,
+        color: editFormData.color || null,
+      })
+      .eq('id', editingAccount.id)
+
+    if (!error) {
+      setAccounts(accounts.map(a =>
+        a.id === editingAccount.id
+          ? { ...a, name: editFormData.name, color: editFormData.color || null }
+          : a
+      ))
+      setEditingAccount(null)
+      setEditFormData({})
+    }
+  }
+
+  const handleSaveCategory = async () => {
+    if (!editingCategory) return
+
+    const { error } = await supabase
+      .from('categories')
+      .update({
+        name: editFormData.name,
+        icon: editFormData.icon || null,
+      })
+      .eq('id', editingCategory.id)
+
+    if (!error) {
+      setCategories(categories.map(c =>
+        c.id === editingCategory.id
+          ? { ...c, name: editFormData.name, icon: editFormData.icon || null }
+          : c
+      ))
+      setEditingCategory(null)
+      setEditFormData({})
+    }
+  }
 
   if (loading) {
     return <div className="p-8 text-center text-muted-foreground">Loading settings...</div>
@@ -98,7 +161,7 @@ export default function Settings() {
                       <StatusBadge status={account.is_active ? 'active' : 'inactive'} />
                     </td>
                     <td className="py-4 border-b border-border text-right">
-                      <Button variant="outline" size="sm">
+                      <Button variant="outline" size="sm" onClick={() => handleEditAccount(account)}>
                         Edit
                       </Button>
                     </td>
@@ -166,7 +229,7 @@ export default function Settings() {
                           </div>
                         </td>
                         <td className="py-3 border-b border-border text-right">
-                          <Button variant="outline" size="sm">
+                          <Button variant="outline" size="sm" onClick={() => handleEditCategory(parent)}>
                             Edit
                           </Button>
                         </td>
@@ -181,7 +244,7 @@ export default function Settings() {
                             </div>
                           </td>
                           <td className="py-2 border-b border-border text-right">
-                            <Button variant="ghost" size="sm">
+                            <Button variant="ghost" size="sm" onClick={() => handleEditCategory(child)}>
                               Edit
                             </Button>
                           </td>
@@ -255,6 +318,81 @@ export default function Settings() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Edit Account Dialog */}
+      <Dialog open={!!editingAccount} onOpenChange={(open) => !open && setEditingAccount(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Account</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div>
+              <Label htmlFor="account-name">Account Name</Label>
+              <Input
+                id="account-name"
+                value={editFormData.name || ''}
+                onChange={(e) => setEditFormData({ ...editFormData, name: e.target.value })}
+                placeholder="Account name"
+              />
+            </div>
+            <div>
+              <Label htmlFor="account-color">Color</Label>
+              <Input
+                id="account-color"
+                type="color"
+                value={editFormData.color || '#888888'}
+                onChange={(e) => setEditFormData({ ...editFormData, color: e.target.value })}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditingAccount(null)}>
+              Cancel
+            </Button>
+            <Button onClick={handleSaveAccount}>
+              Save Changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Category Dialog */}
+      <Dialog open={!!editingCategory} onOpenChange={(open) => !open && setEditingCategory(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Category</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div>
+              <Label htmlFor="category-name">Category Name</Label>
+              <Input
+                id="category-name"
+                value={editFormData.name || ''}
+                onChange={(e) => setEditFormData({ ...editFormData, name: e.target.value })}
+                placeholder="Category name"
+              />
+            </div>
+            <div>
+              <Label htmlFor="category-icon">Icon (emoji)</Label>
+              <Input
+                id="category-icon"
+                value={editFormData.icon || ''}
+                onChange={(e) => setEditFormData({ ...editFormData, icon: e.target.value })}
+                placeholder="🏠"
+                maxLength={2}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditingCategory(null)}>
+              Cancel
+            </Button>
+            <Button onClick={handleSaveCategory}>
+              Save Changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

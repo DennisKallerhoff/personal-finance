@@ -63,7 +63,7 @@ function DropZone({ onFilesSelected }: { onFilesSelected: (files: FileList) => v
         strokeWidth={1.5}
       />
       <p className="font-heading font-bold text-xl text-primary m-0">
-        Drag & Drop PDF files here
+        Drag & Drop PDF or CSV files here
       </p>
       <p className="text-muted-foreground mt-3 m-0">
         or click to browse files
@@ -71,7 +71,7 @@ function DropZone({ onFilesSelected }: { onFilesSelected: (files: FileList) => v
       <input
         ref={fileInputRef}
         type="file"
-        accept=".pdf"
+        accept=".pdf,.csv"
         className="hidden"
         onChange={(e) => e.target.files && onFilesSelected(e.target.files)}
       />
@@ -209,8 +209,9 @@ export default function Import() {
     }
 
     // Validate file type
-    if (!file.name.toLowerCase().endsWith('.pdf')) {
-      setError('Only PDF files are supported')
+    const fileName = file.name.toLowerCase()
+    if (!fileName.endsWith('.pdf') && !fileName.endsWith('.csv')) {
+      setError('Only PDF and CSV files are supported')
       return
     }
 
@@ -457,7 +458,7 @@ export default function Import() {
           <Card>
             <CardContent className="p-16 text-center">
               <div className="animate-spin rounded-full h-16 w-16 border-b-4 border-primary mx-auto mb-4"></div>
-              <p className="font-heading font-bold text-xl text-primary">Processing PDF...</p>
+              <p className="font-heading font-bold text-xl text-primary">Processing file...</p>
               <p className="text-muted-foreground mt-2">Extracting transactions</p>
             </CardContent>
           </Card>
@@ -547,7 +548,7 @@ export default function Import() {
           </h3>
           {importHistory.length === 0 ? (
             <p className="text-muted-foreground text-center py-8">
-              No imports yet. Upload a PDF to get started.
+              No imports yet. Upload a PDF or CSV file to get started.
             </p>
           ) : (
             <table className="w-full">
