@@ -22,6 +22,35 @@ function formatDate(dateStr: string): string {
   })
 }
 
+// Build hierarchical category options with visual grouping
+function buildCategoryOptions(categories: Category[]): JSX.Element[] {
+  const parents = categories.filter(c => c.parent_id === null)
+  const children = categories.filter(c => c.parent_id !== null)
+
+  const options: JSX.Element[] = []
+
+  parents.forEach(parent => {
+    // Add parent category with icon
+    options.push(
+      <option key={parent.id} value={parent.id} className="font-semibold">
+        {parent.icon ? `${parent.icon} ` : ''}{parent.name}
+      </option>
+    )
+
+    // Add child categories with indentation
+    const parentChildren = children.filter(c => c.parent_id === parent.id)
+    parentChildren.forEach(child => {
+      options.push(
+        <option key={child.id} value={child.id} className="pl-4">
+          {child.icon ? `  ${child.icon} ` : '  → '}{child.name}
+        </option>
+      )
+    })
+  })
+
+  return options
+}
+
 interface TransactionWithDetails extends DbTransaction {
   categories?: { name: string; color: string | null } | null
   accounts?: { name: string } | null
@@ -166,9 +195,7 @@ function TransactionDrawer({ transaction, categories, onClose, onCategoryChange,
                   className="w-full p-3 border-2 border-border rounded-lg bg-[#fafafa] focus:border-primary focus:bg-white outline-none"
                 >
                   <option value="">Uncategorized</option>
-                  {categories.map((cat) => (
-                    <option key={cat.id} value={cat.id}>{cat.name}</option>
-                  ))}
+                  {buildCategoryOptions(categories)}
                 </select>
               </div>
             </CardContent>
@@ -510,9 +537,7 @@ export default function Transactions() {
             className="px-3 py-2 border-2 border-border rounded-lg bg-[#fafafa] focus:border-primary focus:bg-white outline-none w-40"
           >
             <option value="">All Categories</option>
-            {categories.map((cat) => (
-              <option key={cat.id} value={cat.id}>{cat.name}</option>
-            ))}
+            {buildCategoryOptions(categories)}
           </select>
           <select
             value={selectedAccount}
@@ -629,9 +654,7 @@ export default function Transactions() {
                         className="px-2 py-1 border border-border rounded text-sm bg-white w-full"
                       >
                         <option value="">-</option>
-                        {categories.map((cat) => (
-                          <option key={cat.id} value={cat.id}>{cat.name}</option>
-                        ))}
+                        {buildCategoryOptions(categories)}
                       </select>
                     </td>
                     <td className={`p-4 border-b border-border text-right font-heading font-semibold ${
