@@ -49,7 +49,7 @@ BEGIN
     AND t.direction = v_opposite_direction      -- Opposite direction
     AND t.date BETWEEN p_date - 5 AND p_date + 5  -- Within 5 days
     AND t.transfer_group_id IS NULL             -- Not already paired
-  ORDER BY ABS(EXTRACT(EPOCH FROM (t.date - p_date)))  -- Closest date first
+  ORDER BY ABS(t.date - p_date)  -- Closest date first (returns days as integer)
   LIMIT 1;
 
   RETURN v_pair_id;
