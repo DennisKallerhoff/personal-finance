@@ -7,10 +7,10 @@
 
 -- 1. Default Accounts
 -- =====================================================
-insert into accounts (id, name, type, color, is_active)
+insert into accounts (id, name, type, color, is_active, account_number)
 values
-  ('a0000001-0001-0001-0001-000000000001', 'ING Girokonto', 'checking', '#FF6200', true),
-  ('a0000001-0001-0001-0001-000000000002', 'DKB Kreditkarte', 'credit_card', '#0077CC', true);
+  ('a0000001-0001-0001-0001-000000000001', 'ING Girokonto', 'checking', '#FF6200', true, null),
+  ('a0000001-0001-0001-0001-000000000002', 'DKB Kreditkarte', 'credit_card', '#0077CC', true, '5310XXXXXXXX5214');
 
 -- =====================================================
 -- 2. Categories (German, 2-level hierarchy)

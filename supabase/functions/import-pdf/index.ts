@@ -49,7 +49,7 @@ serve(async (req: Request) => {
       );
     }
 
-    // Get the PDF file from form data
+    // Get the file from form data (PDF or CSV)
     const formData = await req.formData();
     const file = formData.get('file') as File | null;
     const bankType = formData.get('bank') as string | null;
@@ -58,22 +58,32 @@ serve(async (req: Request) => {
       throw new BadInputError('No file provided');
     }
 
-    // Validate file type
-    if (!file.name.toLowerCase().endsWith('.pdf')) {
-      throw new BadInputError('File must be a PDF');
+    // Validate file type (PDF or CSV)
+    const fileName = file.name.toLowerCase();
+    const isCSV = fileName.endsWith('.csv');
+    const isPDF = fileName.endsWith('.pdf');
+
+    if (!isCSV && !isPDF) {
+      throw new BadInputError('File must be a PDF or CSV');
     }
 
-    // Read file to buffer
-    const arrayBuffer = await file.arrayBuffer();
-    const buffer = new Uint8Array(arrayBuffer);
-
-    // Extract text from PDF
+    // Extract text based on file type
     let text: string;
-    try {
-      const result = await extractText(buffer, { mergePages: true });
-      text = result.text;
-    } catch (e) {
-      throw new UpstreamFailError('Failed to extract text from PDF', e as Error);
+
+    if (isCSV) {
+      // CSV: read as text directly
+      text = await file.text();
+    } else {
+      // PDF: extract text using unpdf
+      const arrayBuffer = await file.arrayBuffer();
+      const buffer = new Uint8Array(arrayBuffer);
+
+      try {
+        const result = await extractText(buffer, { mergePages: true });
+        text = result.text;
+      } catch (e) {
+        throw new UpstreamFailError('Failed to extract text from PDF', e as Error);
+      }
     }
 
     // Detect bank type if not provided
@@ -138,7 +148,10 @@ function detectBankType(text: string, filename: string): 'ing' | 'dkb' | null {
   if (lowerFilename.includes('girokonto') || lowerFilename.includes('ing')) {
     return 'ing';
   }
-  if (lowerFilename.includes('kreditkarte') || lowerFilename.includes('dkb')) {
+  if (lowerFilename.includes('kreditkarte') ||
+      lowerFilename.includes('dkb') ||
+      lowerFilename.includes('umsatzliste') ||
+      lowerFilename.includes('miles')) {
     return 'dkb';
   }
 
