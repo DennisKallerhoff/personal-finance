@@ -411,7 +411,7 @@ export default function Transactions() {
       )
     }
 
-    // @ts-ignore - RPC function not yet in generated types
+    // @ts-expect-error - RPC function not yet in generated types
     const { error } = await supabase.rpc('change_transaction_category', {
       p_transaction_id: transactionId,
       p_new_category_id: categoryId || null

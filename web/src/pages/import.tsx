@@ -6,6 +6,17 @@ import { supabase, type Account, type ImportJob } from '@/lib/supabase'
 import type { Json } from '@/types/database'
 import { useAuth } from '@/hooks/use-auth'
 
+// Types for import warnings and errors
+interface ImportWarning {
+  line?: number
+  message: string
+}
+
+interface ImportError {
+  message: string
+  line?: number
+}
+
 // Compute SHA-256 hash of file for duplicate detection
 async function computeFileHash(file: File): Promise<string> {
   const buffer = await file.arrayBuffer()
@@ -721,7 +732,7 @@ export default function Import() {
       {/* Selected Import Details */}
       {selectedImport && (
         <Card className={`border-l-[6px] ${
-          (selectedImport.warnings as any[])?.length > 0
+          (selectedImport.warnings as ImportWarning[])?.length > 0
             ? 'border-l-[var(--warning)]'
             : 'border-l-[#4CAF50]'
         }`}>
@@ -771,14 +782,14 @@ export default function Import() {
             </div>
 
             {/* Warnings */}
-            {(selectedImport.warnings as any[])?.length > 0 && (
+            {(selectedImport.warnings as ImportWarning[])?.length > 0 && (
               <div className="bg-[var(--warning-light)] rounded-lg p-6 mb-4">
                 <h4 className="flex items-center gap-2 font-heading font-bold text-[#92400e] m-0 mb-3">
                   <AlertTriangle size={20} />
-                  {(selectedImport.warnings as any[]).length} Warning{(selectedImport.warnings as any[]).length > 1 ? 's' : ''}
+                  {(selectedImport.warnings as ImportWarning[]).length} Warning{(selectedImport.warnings as ImportWarning[]).length > 1 ? 's' : ''}
                 </h4>
                 <ul className="m-0 pl-6 text-[#92400e] font-medium space-y-2 text-sm">
-                  {(selectedImport.warnings as any[]).map((warning: any, i: number) => (
+                  {(selectedImport.warnings as ImportWarning[]).map((warning: ImportWarning, i: number) => (
                     <li key={i}>
                       {warning.line ? `Line ${warning.line}: ` : ''}{warning.message || String(warning)}
                     </li>
@@ -788,15 +799,15 @@ export default function Import() {
             )}
 
             {/* Errors */}
-            {(selectedImport.errors as any[])?.length > 0 && (
+            {(selectedImport.errors as ImportError[])?.length > 0 && (
               <div className="bg-[var(--destructive-light)] rounded-lg p-6">
                 <h4 className="flex items-center gap-2 font-heading font-bold text-[#991b1b] m-0 mb-3">
                   <AlertTriangle size={20} />
-                  {(selectedImport.errors as any[]).length} Error{(selectedImport.errors as any[]).length > 1 ? 's' : ''}
+                  {(selectedImport.errors as ImportError[]).length} Error{(selectedImport.errors as ImportError[]).length > 1 ? 's' : ''}
                 </h4>
                 <ul className="m-0 pl-6 text-[#991b1b] font-medium space-y-2 text-sm">
-                  {(selectedImport.errors as any[]).map((error: any, i: number) => (
-                    <li key={i}>{String(error)}</li>
+                  {(selectedImport.errors as ImportError[]).map((error: ImportError, i: number) => (
+                    <li key={i}>{error.message || String(error)}</li>
                   ))}
                 </ul>
               </div>

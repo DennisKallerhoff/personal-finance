@@ -1,62 +1,89 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Link } from 'react-router'
-import { ChevronLeft, ChevronRight, Upload, AlertTriangle, Bell, TrendingUp } from 'lucide-react'
+import { Upload, AlertTriangle, Bell, TrendingUp, X } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Badge } from '@/components/ui/badge'
+import { supabase } from '@/lib/supabase'
+import {
+  formatAmount,
+  getCurrentMonth,
+  getMonthOptions,
+  formatMonthLong,
+  formatMonth,
+  calculatePercentChange,
+  formatCompactAmount
+} from '@/lib/format'
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, LineChart, Line, Legend } from 'recharts'
 
-// Mock data - will be replaced with real data from Supabase
-const MOCK_DATA = {
-  expenses: 2450.0,
-  income: 3200.0,
-  netBalance: 750.0,
-  expensesTrend: 12,
-  topCategories: [
-    { name: 'Groceries', amount: 450.0, change: 5 },
-    { name: 'Rent/Utilities', amount: 1200.0, change: 0 },
-    { name: 'Dining Out', amount: 250.0, change: 15 },
-    { name: 'Transport', amount: 120.0, change: -10 },
-  ],
-  recentImports: [
-    { filename: 'ING_Account_Oct23.pdf', date: 'Imported today', txns: 45, status: 'success' },
-    { filename: 'Visa_Statement_Oct23.pdf', date: 'Imported yesterday', txns: 22, status: 'warning', warnings: 2 },
-  ],
-  signals: [
-    { type: 'trend', title: 'Trend Increase: Dining Out', description: 'Category has increased >15% over the last 3 months.' },
-    { type: 'subscription', title: 'New Subscription Detected', description: '"Netflix" appears monthly (± 3 days) for the last 3 months.' },
-    { type: 'large', title: 'Large One-off Expense', description: 'Transaction of € 450.00 at "Apple Store" detected.' },
-  ],
+// Types for analytics data
+interface MonthStats {
+  expenses: number
+  income: number
+  net: number
+  expensesTrend: number
+  incomeTrend: number
 }
 
-function formatCurrency(amount: number): string {
-  return new Intl.NumberFormat('de-DE', {
-    style: 'currency',
-    currency: 'EUR',
-  }).format(amount)
+interface TopCategory {
+  category_name: string
+  category_color: string
+  expenses_cents: number
+  prev_month_expenses: number
 }
 
-function TrendBadge({ change }: { change: number }) {
-  if (change > 0) {
-    return (
-      <span className="inline-flex items-center gap-1 text-sm font-semibold px-2 py-0.5 rounded bg-[var(--destructive-light)] text-[#991b1b]">
-        +{change}%
-      </span>
-    )
-  }
-  if (change < 0) {
-    return (
-      <span className="inline-flex items-center gap-1 text-sm font-semibold px-2 py-0.5 rounded bg-[var(--success-light)] text-[#166534]">
-        {change}%
-      </span>
-    )
-  }
-  return (
-    <span className="inline-flex items-center gap-1 text-sm font-semibold px-2 py-0.5 rounded bg-muted text-muted-foreground">
-      0%
-    </span>
-  )
+interface TrendData {
+  month: string
+  expenses: number
+  income: number
+  rolling_avg_3m: number | null
 }
 
-function MetricCard({ label, value, trend, valueColor }: { label: string; value: string; trend?: number; valueColor?: string }) {
+interface Signal {
+  type: 'TREND_UP' | 'TREND_DOWN' | 'SUBSCRIPTION' | 'LARGE_TRANSACTION' | 'NEW_MERCHANT'
+  title: string
+  description: string
+  severity: 'info' | 'warning' | 'alert'
+  id: string
+}
+
+// Response types from Postgres RPC functions
+interface TrendSignalResponse {
+  signal_type: 'TREND_UP' | 'TREND_DOWN'
+  severity: 'info' | 'warning' | 'alert'
+  category_name: string
+  change_pct: number
+  month: string
+}
+
+interface SubscriptionSignalResponse {
+  normalized_vendor: string
+  frequency: string
+  typical_amount: number
+  confidence: 'high' | 'medium' | 'low'
+}
+
+interface LargeTransactionSignalResponse {
+  transaction_id: string
+  vendor: string
+  amount: number
+  date: string
+}
+
+interface NewMerchantSignalResponse {
+  vendor: string
+  first_occurrence: string
+  amount: number
+}
+
+function MetricCard({ label, value, trend, valueColor }: {
+  label: string
+  value: string
+  trend?: number
+  valueColor?: string
+}) {
   return (
     <Card className="relative overflow-hidden">
       <div className="absolute top-0 left-0 w-1 h-full bg-primary opacity-50" />
@@ -76,7 +103,7 @@ function MetricCard({ label, value, trend, valueColor }: { label: string; value:
                   ? 'bg-[var(--success-light)] text-[#166534]'
                   : 'bg-muted text-muted-foreground'
             }`}>
-              {trend > 0 ? '▲' : trend < 0 ? '▼' : '—'} {Math.abs(trend)}%
+              {trend > 0 ? '▲' : trend < 0 ? '▼' : '—'} {Math.abs(trend).toFixed(1)}%
             </span>
           </div>
         )}
@@ -85,420 +112,427 @@ function MetricCard({ label, value, trend, valueColor }: { label: string; value:
   )
 }
 
-function SimpleLineChart() {
-  return (
-    <div className="h-[200px] relative pb-6">
-      <svg className="w-full h-full" viewBox="0 0 300 150" preserveAspectRatio="none">
-        <defs>
-          <linearGradient id="chartGradient" x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stopColor="var(--primary)" stopOpacity="0.2" />
-            <stop offset="100%" stopColor="var(--primary)" stopOpacity="0" />
-          </linearGradient>
-        </defs>
-        <path
-          d="M0,150 L0,100 L50,110 L100,80 L150,90 L200,60 L250,70 L300,150 Z"
-          fill="url(#chartGradient)"
-        />
-        <path
-          d="M0,100 L50,110 L100,80 L150,90 L200,60 L250,70"
-          fill="none"
-          stroke="var(--primary)"
-          strokeWidth="3"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-        {[
-          { x: 0, y: 100 },
-          { x: 50, y: 110 },
-          { x: 100, y: 80 },
-          { x: 150, y: 90 },
-          { x: 200, y: 60 },
-          { x: 250, y: 70 },
-        ].map((point, i) => (
-          <circle
-            key={i}
-            cx={point.x}
-            cy={point.y}
-            r="4"
-            fill="white"
-            stroke="var(--primary)"
-            strokeWidth="2"
-          />
-        ))}
-      </svg>
-      <div className="absolute bottom-0 w-full flex justify-between text-xs text-muted-foreground font-medium px-2">
-        <span>May</span>
-        <span>Jun</span>
-        <span>Jul</span>
-        <span>Aug</span>
-        <span>Sep</span>
-        <span>Oct</span>
-      </div>
-    </div>
-  )
-}
-
-function BarChart() {
-  const data = [
-    { month: 'Jun', rent: 40, groceries: 30, dining: 20 },
-    { month: 'Jul', rent: 45, groceries: 25, dining: 25 },
-    { month: 'Aug', rent: 35, groceries: 35, dining: 15 },
-    { month: 'Sep', rent: 50, groceries: 30, dining: 20 },
-    { month: 'Oct', rent: 42, groceries: 28, dining: 22 },
-  ]
-
-  return (
-    <div className="h-[300px]">
-      <div className="h-full flex items-end gap-3 pb-8">
-        {data.map((item, i) => (
-          <div key={i} className="flex-1 flex flex-col items-center justify-end h-full gap-1">
-            <div className="w-full rounded-t" style={{ height: `${item.dining}%`, backgroundColor: '#f59e0b' }} />
-            <div className="w-full" style={{ height: `${item.groceries}%`, backgroundColor: 'var(--primary)' }} />
-            <div className="w-full rounded-t" style={{ height: `${item.rent}%`, backgroundColor: '#0ea5e9' }} />
-            <span className={`text-xs font-semibold mt-2 ${i === data.length - 1 ? 'text-secondary' : 'text-muted-foreground'}`}>
-              {item.month}
-            </span>
-          </div>
-        ))}
-      </div>
-      <div className="flex justify-center gap-5 mt-4">
-        <div className="flex items-center gap-2 text-sm">
-          <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: '#0ea5e9' }} />
-          Rent
-        </div>
-        <div className="flex items-center gap-2 text-sm">
-          <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: 'var(--primary)' }} />
-          Groceries
-        </div>
-        <div className="flex items-center gap-2 text-sm">
-          <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: '#f59e0b' }} />
-          Dining
-        </div>
-      </div>
-    </div>
-  )
-}
-
 export default function Home() {
-  const [activeTab, setActiveTab] = useState<'overview' | 'trends' | 'signals'>('overview')
-  const [currentMonth, setCurrentMonth] = useState('October 2023')
+  const [selectedMonth, setSelectedMonth] = useState(getCurrentMonth())
+  const [monthStats, setMonthStats] = useState<MonthStats | null>(null)
+  const [topCategories, setTopCategories] = useState<TopCategory[]>([])
+  const [trendData, setTrendData] = useState<TrendData[]>([])
+  const [signals, setSignals] = useState<Signal[]>([])
+  const [dismissedSignals, setDismissedSignals] = useState<Set<string>>(new Set())
+  const [loading, setLoading] = useState(true)
+  const [showRollingAvg, setShowRollingAvg] = useState(false)
+
+  const monthOptions = getMonthOptions(12)
+
+  // Fetch data for Overview tab
+  useEffect(() => {
+    const fetchOverviewData = async () => {
+      setLoading(true)
+
+      try {
+        // Fetch monthly summary for selected month
+        const { data: monthData, error: monthError } = await supabase
+          .from('monthly_summary')
+          .select('*')
+          .eq('month', selectedMonth)
+
+        if (monthError) throw monthError
+
+        // Calculate totals for the month
+        const totalExpenses = monthData?.reduce((sum, row) => sum + (row.expenses_cents || 0), 0) || 0
+        const totalIncome = monthData?.reduce((sum, row) => sum + (row.income_cents || 0), 0) || 0
+
+        // Fetch previous month for trend calculation
+        const prevMonthDate = new Date(selectedMonth)
+        prevMonthDate.setMonth(prevMonthDate.getMonth() - 1)
+        const prevMonth = `${prevMonthDate.getFullYear()}-${String(prevMonthDate.getMonth() + 1).padStart(2, '0')}-01`
+
+        const { data: prevMonthData } = await supabase
+          .from('monthly_summary')
+          .select('*')
+          .eq('month', prevMonth)
+
+        const prevExpenses = prevMonthData?.reduce((sum, row) => sum + (row.expenses_cents || 0), 0) || 0
+        const prevIncome = prevMonthData?.reduce((sum, row) => sum + (row.income_cents || 0), 0) || 0
+
+        setMonthStats({
+          expenses: totalExpenses,
+          income: totalIncome,
+          net: totalIncome - totalExpenses,
+          expensesTrend: calculatePercentChange(prevExpenses, totalExpenses),
+          incomeTrend: calculatePercentChange(prevIncome, totalIncome)
+        })
+
+        // Fetch top 5 categories for selected month
+        const { data: categoryData } = await supabase
+          .from('monthly_summary')
+          .select('category_name, category_color, expenses_cents')
+          .eq('month', selectedMonth)
+          .not('category_name', 'is', null)
+          .order('expenses_cents', { ascending: false })
+          .limit(5)
+
+        // Get previous month data for each category
+        const topCats: TopCategory[] = []
+        for (const cat of categoryData || []) {
+          const { data: prevCatData } = await supabase
+            .from('monthly_summary')
+            .select('expenses_cents')
+            .eq('month', prevMonth)
+            .eq('category_name', cat.category_name)
+            .maybeSingle()
+
+          topCats.push({
+            category_name: cat.category_name,
+            category_color: cat.category_color || '#3b82f6',
+            expenses_cents: cat.expenses_cents || 0,
+            prev_month_expenses: prevCatData?.expenses_cents || 0
+          })
+        }
+
+        setTopCategories(topCats)
+
+      } catch (error) {
+        console.error('Error fetching overview data:', error)
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    fetchOverviewData()
+  }, [selectedMonth])
+
+  // Fetch trend data (monthly_trends view)
+  useEffect(() => {
+    const fetchTrendData = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('monthly_trends')
+          .select('*')
+          .order('month', { ascending: true })
+          .limit(12)
+
+        if (error) throw error
+
+        setTrendData(data || [])
+      } catch (error) {
+        console.error('Error fetching trend data:', error)
+      }
+    }
+
+    fetchTrendData()
+  }, [])
+
+  // Fetch signals from detection functions
+  useEffect(() => {
+    const fetchSignals = async () => {
+      try {
+        const detectedSignals: Signal[] = []
+
+        // Fetch trend signals
+        const { data: trendSignals } = await supabase.rpc('detect_trend_signals')
+        trendSignals?.forEach((sig: TrendSignalResponse) => {
+          const key = `${sig.signal_type}:${sig.category_name}:${sig.month}`
+          if (!dismissedSignals.has(key)) {
+            detectedSignals.push({
+              type: sig.signal_type,
+              title: `${sig.signal_type === 'TREND_UP' ? 'Increase' : 'Decrease'}: ${sig.category_name}`,
+              description: `Spending ${sig.signal_type === 'TREND_UP' ? 'increased' : 'decreased'} by ${Math.abs(sig.change_pct).toFixed(1)}% over the last 3 months`,
+              severity: sig.severity,
+              id: key
+            })
+          }
+        })
+
+        // Fetch subscription signals
+        const { data: subSignals } = await supabase.rpc('detect_subscriptions')
+        subSignals?.slice(0, 5).forEach((sig: SubscriptionSignalResponse) => {
+          const key = `SUBSCRIPTION:${sig.normalized_vendor}`
+          if (!dismissedSignals.has(key)) {
+            detectedSignals.push({
+              type: 'SUBSCRIPTION',
+              title: `Subscription Detected: ${sig.normalized_vendor}`,
+              description: `${sig.frequency} charge of ${formatAmount(sig.typical_amount)} (${sig.confidence} confidence)`,
+              severity: sig.confidence === 'high' ? 'info' : 'warning',
+              id: key
+            })
+          }
+        })
+
+        // Fetch large transaction signals
+        const { data: largeSignals } = await supabase.rpc('detect_large_transactions', {
+          lookback_months: 3,
+          threshold_cents: 10000
+        })
+        largeSignals?.slice(0, 3).forEach((sig: LargeTransactionSignalResponse) => {
+          const key = `LARGE_TRANSACTION:${sig.transaction_id}`
+          if (!dismissedSignals.has(key)) {
+            detectedSignals.push({
+              type: 'LARGE_TRANSACTION',
+              title: 'Large One-off Expense',
+              description: `${formatAmount(sig.amount)} at "${sig.vendor}" on ${sig.date}`,
+              severity: sig.amount > 20000 ? 'alert' : 'warning',
+              id: key
+            })
+          }
+        })
+
+        // Fetch new merchant signals
+        const { data: newMerchants } = await supabase.rpc('detect_new_merchants', { lookback_days: 30 })
+        newMerchants?.slice(0, 3).forEach((sig: NewMerchantSignalResponse) => {
+          const key = `NEW_MERCHANT:${sig.vendor}`
+          if (!dismissedSignals.has(key)) {
+            detectedSignals.push({
+              type: 'NEW_MERCHANT',
+              title: `New Merchant: ${sig.vendor}`,
+              description: `First purchase on ${sig.first_occurrence} (${formatAmount(sig.amount)})`,
+              severity: 'info',
+              id: key
+            })
+          }
+        })
+
+        setSignals(detectedSignals)
+      } catch (error) {
+        console.error('Error fetching signals:', error)
+      }
+    }
+
+    fetchSignals()
+  }, [dismissedSignals])
+
+  const handleDismissSignal = async (signalId: string, signalType: string) => {
+    try {
+      // Store dismissal in database
+      await supabase.from('dismissed_signals').insert({
+        signal_type: signalType,
+        signal_key: signalId
+      })
+
+      // Update local state
+      setDismissedSignals(prev => new Set([...prev, signalId]))
+    } catch (error) {
+      console.error('Error dismissing signal:', error)
+    }
+  }
+
+  if (loading) {
+    return <div className="flex items-center justify-center h-64">Laden...</div>
+  }
 
   return (
     <div>
-      {/* Month Selector + Upload Button */}
+      {/* Header with Month Selector */}
       <div className="flex items-center justify-between mb-8">
+        <h2 className="text-3xl font-bold">{formatMonthLong(selectedMonth)}</h2>
         <div className="flex items-center gap-4">
-          <Button
-            variant="outline"
-            size="icon"
-            className="rounded-full w-9 h-9"
-            onClick={() => setCurrentMonth('September 2023')}
-          >
-            <ChevronLeft size={18} />
-          </Button>
-          <h2 className="text-3xl font-bold m-0">{currentMonth}</h2>
-          <Button
-            variant="outline"
-            size="icon"
-            className="rounded-full w-9 h-9"
-            onClick={() => setCurrentMonth('November 2023')}
-          >
-            <ChevronRight size={18} />
-          </Button>
+          <Select value={selectedMonth} onValueChange={setSelectedMonth}>
+            <SelectTrigger className="w-[200px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {monthOptions.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Link to="/import">
+            <Button className="gap-2">
+              <Upload size={18} />
+              Upload Statement
+            </Button>
+          </Link>
         </div>
-        <Link to="/import">
-          <Button className="gap-2">
-            <Upload size={18} />
-            Upload Statement
-          </Button>
-        </Link>
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-4 border-b-2 border-border mb-6">
-        <button
-          onClick={() => setActiveTab('overview')}
-          className={`px-6 py-3 font-heading text-lg font-semibold border-b-[3px] -mb-[2px] transition-colors ${
-            activeTab === 'overview'
-              ? 'text-secondary border-primary'
-              : 'text-muted-foreground border-transparent hover:text-secondary'
-          }`}
-        >
-          Overview
-        </button>
-        <button
-          onClick={() => setActiveTab('trends')}
-          className={`px-6 py-3 font-heading text-lg font-semibold border-b-[3px] -mb-[2px] transition-colors ${
-            activeTab === 'trends'
-              ? 'text-secondary border-primary'
-              : 'text-muted-foreground border-transparent hover:text-secondary'
-          }`}
-        >
-          Trends
-        </button>
-        <button
-          onClick={() => setActiveTab('signals')}
-          className={`px-6 py-3 font-heading text-lg font-semibold border-b-[3px] -mb-[2px] transition-colors flex items-center gap-2 ${
-            activeTab === 'signals'
-              ? 'text-secondary border-primary'
-              : 'text-muted-foreground border-transparent hover:text-secondary'
-          }`}
-        >
-          Signals
-          <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-[var(--warning-light)] text-[#92400e]">
-            {MOCK_DATA.signals.length}
-          </span>
-        </button>
-      </div>
+      <Tabs defaultValue="overview" className="w-full">
+        <TabsList className="grid w-full grid-cols-3 mb-6">
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="trends">Trends</TabsTrigger>
+          <TabsTrigger value="signals" className="flex items-center gap-2">
+            Signals
+            {signals.length > 0 && (
+              <Badge variant="secondary" className="bg-[var(--warning-light)] text-[#92400e]">
+                {signals.length}
+              </Badge>
+            )}
+          </TabsTrigger>
+        </TabsList>
 
-      {/* Tab Content: Overview */}
-      {activeTab === 'overview' && (
-        <div className="animate-in fade-in duration-300">
+        {/* Overview Tab */}
+        <TabsContent value="overview" className="space-y-6">
           {/* Key Metrics */}
-          <div className="grid grid-cols-3 gap-6 mb-6">
+          <div className="grid grid-cols-3 gap-6">
             <MetricCard
               label="Expenses"
-              value={formatCurrency(MOCK_DATA.expenses)}
-              trend={MOCK_DATA.expensesTrend}
+              value={formatAmount(monthStats?.expenses || 0)}
+              trend={monthStats?.expensesTrend}
             />
             <MetricCard
               label="Income"
-              value={formatCurrency(MOCK_DATA.income)}
-              trend={0}
+              value={formatAmount(monthStats?.income || 0)}
+              trend={monthStats?.incomeTrend}
             />
             <MetricCard
               label="Net Balance"
-              value={`+ ${formatCurrency(MOCK_DATA.netBalance)}`}
-              valueColor="text-[var(--success)]"
+              value={formatAmount(Math.abs(monthStats?.net || 0))}
+              valueColor={(monthStats?.net || 0) >= 0 ? 'text-[var(--success)]' : 'text-[var(--destructive)]'}
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-6">
-            {/* Mini Trend Chart */}
-            <Card>
-              <CardContent className="p-6">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-5">
-                  6-Month Trend
-                </h3>
-                <SimpleLineChart />
-              </CardContent>
-            </Card>
-
-            {/* Top Categories */}
-            <Card>
-              <CardContent className="p-6">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-5">
-                  Top Categories
-                </h3>
-                <table className="w-full">
-                  <thead>
-                    <tr>
-                      <th className="text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground pb-3 border-b-2 border-border">
-                        Category
-                      </th>
-                      <th className="text-right text-xs font-semibold uppercase tracking-wider text-muted-foreground pb-3 border-b-2 border-border">
-                        Amount
-                      </th>
-                      <th className="text-right text-xs font-semibold uppercase tracking-wider text-muted-foreground pb-3 border-b-2 border-border">
-                        Change
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {MOCK_DATA.topCategories.map((cat) => (
-                      <tr key={cat.name} className="hover:bg-[#fafafa]">
-                        <td className="py-4 border-b border-border">{cat.name}</td>
-                        <td className="py-4 border-b border-border text-right font-heading font-semibold">
-                          {formatCurrency(cat.amount)}
-                        </td>
-                        <td className="py-4 border-b border-border text-right">
-                          <TrendBadge change={cat.change} />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Recent Imports */}
-          <Card className="mt-6">
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between mb-5">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground m-0">
-                  Recent Imports
-                </h3>
-                <Link to="/import" className="text-sm font-semibold text-primary hover:text-[var(--primary-dark)]">
-                  View All &rarr;
-                </Link>
-              </div>
-              <div className="grid grid-cols-3 gap-4">
-                {MOCK_DATA.recentImports.map((imp) => (
-                  <div key={imp.filename} className="border-2 border-border rounded-lg p-4">
-                    <div className="font-bold mb-1">{imp.filename}</div>
-                    <div className="text-sm text-muted-foreground mb-2">
-                      {imp.date} &bull; {imp.txns} txns
-                    </div>
-                    <span className={`inline-flex text-xs font-bold uppercase tracking-wider px-2 py-1 rounded-full ${
-                      imp.status === 'success'
-                        ? 'bg-[var(--success-light)] text-[#166534]'
-                        : 'bg-[var(--warning-light)] text-[#92400e]'
-                    }`}>
-                      {imp.status === 'success' ? 'Success' : `${imp.warnings} Warnings`}
-                    </span>
-                  </div>
-                ))}
-                <Link
-                  to="/import"
-                  className="border-2 border-dashed border-primary bg-[var(--primary-light)] rounded-lg p-4 flex items-center justify-center text-primary font-bold hover:bg-[#d1fae5] transition-colors"
-                >
-                  + Upload New
-                </Link>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      )}
-
-      {/* Tab Content: Trends */}
-      {activeTab === 'trends' && (
-        <div className="animate-in fade-in duration-300">
-          <Card className="mb-6">
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground m-0">
-                  Monthly Total Spend (12 Months)
-                </h3>
-                <div className="flex items-center gap-4">
-                  <label className="flex items-center gap-2 text-sm font-semibold cursor-pointer">
-                    <input type="checkbox" defaultChecked className="accent-primary" />
-                    Rolling 3-month avg
-                  </label>
-                  <select className="px-3 py-1.5 border-2 border-border rounded-lg text-sm bg-[#fafafa] focus:border-primary focus:bg-white outline-none">
-                    <option>All Categories</option>
-                    <option>Groceries</option>
-                    <option>Rent</option>
-                  </select>
-                </div>
-              </div>
-              <div className="h-[300px] relative pb-8">
-                <svg className="w-full h-full" viewBox="0 0 800 200" preserveAspectRatio="none">
-                  <line x1="0" y1="50" x2="800" y2="50" stroke="#eee" />
-                  <line x1="0" y1="100" x2="800" y2="100" stroke="#eee" />
-                  <line x1="0" y1="150" x2="800" y2="150" stroke="#eee" />
-                  <path
-                    d="M0,150 Q100,140 200,100 T400,120 T600,80 T800,90"
-                    fill="none"
-                    stroke="var(--primary)"
-                    strokeWidth="3"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                  {[
-                    { x: 0, y: 150 },
-                    { x: 200, y: 100 },
-                    { x: 400, y: 120 },
-                    { x: 600, y: 80 },
-                    { x: 800, y: 90 },
-                  ].map((point, i) => (
-                    <circle
-                      key={i}
-                      cx={point.x}
-                      cy={point.y}
-                      r="4"
-                      fill="white"
-                      stroke="var(--primary)"
-                      strokeWidth="2"
-                    />
-                  ))}
-                </svg>
-                <div className="absolute bottom-0 w-full flex justify-between text-xs text-muted-foreground font-semibold">
-                  <span>Nov '22</span>
-                  <span>Feb '23</span>
-                  <span>May '23</span>
-                  <span>Aug '23</span>
-                  <span>Oct '23</span>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
+          {/* Top Categories */}
           <Card>
             <CardContent className="p-6">
               <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-5">
-                Category Spend Over Time
+                Top 5 Categories
               </h3>
-              <BarChart />
-            </CardContent>
-          </Card>
-        </div>
-      )}
-
-      {/* Tab Content: Signals */}
-      {activeTab === 'signals' && (
-        <div className="animate-in fade-in duration-300 space-y-4">
-          {/* Trend Warning */}
-          <Card className="border-l-[6px] border-l-[var(--warning)]">
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-6">
-                  <div className="w-12 h-12 rounded-full bg-[var(--warning-light)] text-[var(--warning)] flex items-center justify-center">
-                    <AlertTriangle size={24} />
-                  </div>
-                  <div>
-                    <h4 className="font-heading font-bold text-lg m-0">Trend Increase: Dining Out</h4>
-                    <p className="text-muted-foreground mt-1 m-0">
-                      Category has increased <strong className="text-destructive">&gt;15%</strong> over the last 3 months.
-                    </p>
-                  </div>
+              {topCategories.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  <p>No category data available for this month.</p>
+                  <p className="text-sm mt-2">Import transactions to see spending breakdown.</p>
                 </div>
-                <Button variant="outline" size="sm">View Details</Button>
-              </div>
+              ) : (
+                <ResponsiveContainer width="100%" height={300}>
+                  <BarChart data={topCategories.map(cat => ({
+                    name: cat.category_name,
+                    amount: cat.expenses_cents,
+                    color: cat.category_color
+                  }))}>
+                    <XAxis dataKey="name" />
+                    <YAxis tickFormatter={(v) => formatCompactAmount(v)} />
+                    <Tooltip formatter={(value) => formatAmount(value as number)} />
+                    <Bar dataKey="amount" fill="#3b82f6" />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
             </CardContent>
           </Card>
+        </TabsContent>
 
-          {/* Subscription */}
-          <Card className="border-l-[6px] border-l-primary">
+        {/* Trends Tab */}
+        <TabsContent value="trends" className="space-y-6">
+          <Card>
             <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-6">
-                  <div className="w-12 h-12 rounded-full bg-[var(--primary-light)] text-primary flex items-center justify-center">
-                    <Bell size={24} />
-                  </div>
-                  <div>
-                    <h4 className="font-heading font-bold text-lg m-0">New Subscription Detected</h4>
-                    <p className="text-muted-foreground mt-1 m-0">
-                      "Netflix" appears monthly (&plusmn; 3 days) for the last 3 months.
-                    </p>
-                  </div>
-                </div>
-                <Button variant="outline" size="sm">View Details</Button>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                  Monthly Trends (12 Months)
+                </h3>
+                <label className="flex items-center gap-2 text-sm font-semibold cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={showRollingAvg}
+                    onChange={(e) => setShowRollingAvg(e.target.checked)}
+                    className="accent-primary"
+                  />
+                  Show 3-month average
+                </label>
               </div>
+              {trendData.length < 2 ? (
+                <div className="text-center py-12 text-muted-foreground">
+                  <p className="font-semibold">Insufficient data for trend analysis</p>
+                  <p className="text-sm mt-2">Import at least 2 months of transactions to see trends.</p>
+                  <p className="text-sm">(Currently: {trendData.length} month{trendData.length !== 1 ? 's' : ''})</p>
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height={400}>
+                  <LineChart data={trendData}>
+                    <XAxis dataKey="month" tickFormatter={(m) => formatMonth(m)} />
+                    <YAxis tickFormatter={(v) => formatCompactAmount(v)} />
+                    <Tooltip
+                      formatter={(value) => formatAmount(value as number)}
+                      labelFormatter={(label) => formatMonthLong(label)}
+                    />
+                    <Legend />
+                    <Line
+                      type="monotone"
+                      dataKey="expenses"
+                      stroke="#ef4444"
+                      name="Expenses"
+                      strokeWidth={2}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="income"
+                      stroke="#22c55e"
+                      name="Income"
+                      strokeWidth={2}
+                    />
+                    {showRollingAvg && (
+                      <Line
+                        type="monotone"
+                        dataKey="rolling_avg_3m"
+                        stroke="#3b82f6"
+                        name="3-Month Avg"
+                        strokeWidth={2}
+                        strokeDasharray="5 5"
+                      />
+                    )}
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
             </CardContent>
           </Card>
+        </TabsContent>
 
-          {/* Large Expense */}
-          <Card className="border-l-[6px] border-l-destructive">
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-6">
-                  <div className="w-12 h-12 rounded-full bg-[var(--destructive-light)] text-destructive flex items-center justify-center">
-                    <TrendingUp size={24} />
+        {/* Signals Tab */}
+        <TabsContent value="signals" className="space-y-4">
+          {signals.length === 0 ? (
+            <Card>
+              <CardContent className="p-12 text-center">
+                <div className="text-6xl mb-4">🎉</div>
+                <h3 className="text-xl font-bold mb-2">Alles im grünen Bereich!</h3>
+                <p className="text-muted-foreground">
+                  No unusual patterns detected. Signals appear when spending changes significantly,
+                  new subscriptions are found, or large one-time expenses occur.
+                </p>
+              </CardContent>
+            </Card>
+          ) : (
+            signals.map((signal) => (
+              <Card key={signal.id} className={`border-l-4 ${
+                signal.severity === 'alert' ? 'border-l-red-500' :
+                signal.severity === 'warning' ? 'border-l-amber-500' :
+                'border-l-blue-500'
+              }`}>
+                <CardContent className="p-6">
+                  <div className="flex items-start justify-between">
+                    <div className="flex items-start gap-3 flex-1">
+                      <div className={`p-2 rounded-lg ${
+                        signal.severity === 'alert' ? 'bg-red-100 text-red-700' :
+                        signal.severity === 'warning' ? 'bg-amber-100 text-amber-700' :
+                        'bg-blue-100 text-blue-700'
+                      }`}>
+                        {signal.type === 'TREND_UP' || signal.type === 'TREND_DOWN' ? (
+                          <TrendingUp size={20} />
+                        ) : signal.type === 'SUBSCRIPTION' ? (
+                          <Bell size={20} />
+                        ) : (
+                          <AlertTriangle size={20} />
+                        )}
+                      </div>
+                      <div className="flex-1">
+                        <h4 className="font-bold mb-1">{signal.title}</h4>
+                        <p className="text-sm text-muted-foreground">{signal.description}</p>
+                      </div>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleDismissSignal(signal.id, signal.type)}
+                      className="ml-4"
+                    >
+                      <X size={16} />
+                    </Button>
                   </div>
-                  <div>
-                    <h4 className="font-heading font-bold text-lg m-0">Large One-off Expense</h4>
-                    <p className="text-muted-foreground mt-1 m-0">
-                      Transaction of <strong className="text-foreground">{formatCurrency(450)}</strong> at "Apple Store" detected.
-                    </p>
-                  </div>
-                </div>
-                <Button variant="outline" size="sm">View Details</Button>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      )}
+                </CardContent>
+              </Card>
+            ))
+          )}
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }
