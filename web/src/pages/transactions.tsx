@@ -3,7 +3,7 @@ import { X, Info, ChevronLeft, ChevronRight } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { supabase, type Transaction as DbTransaction, type Category, type Account } from '@/lib/supabase'
+import { supabase, type Transaction as DbTransaction, type Category, type Account, type Comment } from '@/lib/supabase'
 
 function formatCurrency(amount: number): string {
   const euros = amount / 100
@@ -25,6 +25,7 @@ function formatDate(dateStr: string): string {
 interface TransactionWithDetails extends DbTransaction {
   categories?: { name: string; color: string | null } | null
   accounts?: { name: string } | null
+  is_flagged?: boolean
 }
 
 interface DrawerProps {
@@ -32,9 +33,54 @@ interface DrawerProps {
   categories: Category[]
   onClose: () => void
   onCategoryChange: (transactionId: string, categoryId: string) => void
+  onToggle: (field: 'is_transfer' | 'is_reviewed' | 'is_flagged', value: boolean) => void
 }
 
-function TransactionDrawer({ transaction, categories, onClose, onCategoryChange }: DrawerProps) {
+function TransactionDrawer({ transaction, categories, onClose, onCategoryChange, onToggle }: DrawerProps) {
+  const [comments, setComments] = useState<Comment[]>([])
+  const [newComment, setNewComment] = useState('')
+  const [loadingComments, setLoadingComments] = useState(false)
+
+  // Fetch comments when drawer opens
+  useEffect(() => {
+    if (!transaction) {
+      setComments([])
+      return
+    }
+
+    const fetchComments = async () => {
+      setLoadingComments(true)
+      const { data } = await supabase
+        .from('comments')
+        .select('*')
+        .eq('transaction_id', transaction.id)
+        .order('created_at', { ascending: true })
+
+      if (data) setComments(data)
+      setLoadingComments(false)
+    }
+
+    fetchComments()
+  }, [transaction?.id])
+
+  const handleAddComment = async () => {
+    if (!transaction || !newComment.trim()) return
+
+    const { data } = await supabase
+      .from('comments')
+      .insert({
+        transaction_id: transaction.id,
+        text: newComment.trim()
+      })
+      .select()
+      .single()
+
+    if (data) {
+      setComments(prev => [...prev, data])
+      setNewComment('')
+    }
+  }
+
   if (!transaction) return null
 
   // Convert to signed amount for display
@@ -125,25 +171,85 @@ function TransactionDrawer({ transaction, categories, onClose, onCategoryChange 
                   ))}
                 </select>
               </div>
-              <div className="flex gap-6 mt-6">
-                <label className="flex items-center gap-2 cursor-pointer font-medium">
-                  <input
-                    type="checkbox"
-                    checked={transaction.is_transfer ?? false}
-                    readOnly
-                    className="accent-primary w-4 h-4"
-                  />
-                  Transfer
-                </label>
-                <label className="flex items-center gap-2 cursor-pointer font-medium">
-                  <input
-                    type="checkbox"
-                    checked={transaction.is_reviewed ?? false}
-                    readOnly
-                    className="accent-primary w-4 h-4"
-                  />
-                  Reviewed
-                </label>
+            </CardContent>
+          </Card>
+
+          {/* Quick Actions */}
+          <Card className="mb-6">
+            <CardContent className="p-6">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-4">
+                Quick Actions
+              </h3>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant={transaction.is_transfer ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => onToggle('is_transfer', !transaction.is_transfer)}
+                >
+                  {transaction.is_transfer ? '↔️ Transfer' : '↔️ Mark as Transfer'}
+                </Button>
+
+                <Button
+                  variant={transaction.is_reviewed ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => onToggle('is_reviewed', !transaction.is_reviewed)}
+                >
+                  {transaction.is_reviewed ? '✓ Reviewed' : '○ Mark Reviewed'}
+                </Button>
+
+                <Button
+                  variant={transaction.is_flagged ? "destructive" : "outline"}
+                  size="sm"
+                  onClick={() => onToggle('is_flagged', !transaction.is_flagged)}
+                >
+                  {transaction.is_flagged ? '🚩 Flagged' : '⚑ Flag'}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Comments */}
+          <Card className="mb-6">
+            <CardContent className="p-6">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-4">
+                Comments
+              </h3>
+
+              {/* Comment List */}
+              <div className="space-y-3 mb-4 max-h-48 overflow-y-auto">
+                {loadingComments ? (
+                  <p className="text-sm text-muted-foreground">Loading comments...</p>
+                ) : comments.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No comments yet.</p>
+                ) : (
+                  comments.map(comment => (
+                    <div key={comment.id} className="bg-muted/50 rounded p-3">
+                      <p className="text-sm">{comment.text}</p>
+                      {comment.created_at && (
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {new Date(comment.created_at).toLocaleDateString('de-DE')}
+                        </p>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {/* Add Comment */}
+              <div className="flex gap-2">
+                <Input
+                  value={newComment}
+                  onChange={(e) => setNewComment(e.target.value)}
+                  placeholder="Add a comment..."
+                  onKeyDown={(e) => e.key === 'Enter' && handleAddComment()}
+                />
+                <Button
+                  size="sm"
+                  onClick={handleAddComment}
+                  disabled={!newComment.trim()}
+                >
+                  Add
+                </Button>
               </div>
             </CardContent>
           </Card>
@@ -287,22 +393,11 @@ export default function Transactions() {
     fetchTransactions()
   }, [selectedDateRange, selectedCategory, selectedAccount, currentPage])
 
-  // Handle category change
+  // Handle category change using RPC for audit trail
   const handleCategoryChange = async (transactionId: string, categoryId: string) => {
     setUpdateError(null)
-    const { error } = await supabase
-      .from('transactions')
-      .update({ category_id: categoryId || null, is_reviewed: true })
-      .eq('id', transactionId)
 
-    if (error) {
-      setUpdateError('Failed to update category. Please try again.')
-      // Auto-clear error after 5 seconds
-      setTimeout(() => setUpdateError(null), 5000)
-      return
-    }
-
-    // Update local state
+    // Optimistic update
     setTransactions(prev =>
       prev.map(t =>
         t.id === transactionId
@@ -310,11 +405,74 @@ export default function Transactions() {
           : t
       )
     )
-    // Update selected transaction if open
     if (selectedTransaction?.id === transactionId) {
       setSelectedTransaction(prev =>
         prev ? { ...prev, category_id: categoryId || null, is_reviewed: true } : null
       )
+    }
+
+    // @ts-ignore - RPC function not yet in generated types
+    const { error } = await supabase.rpc('change_transaction_category', {
+      p_transaction_id: transactionId,
+      p_new_category_id: categoryId || null
+    })
+
+    if (error) {
+      setUpdateError('Failed to update category. Please try again.')
+      // Rollback on error
+      const { startDate, endDate } = getDateRange(selectedDateRange)
+      const from = (currentPage - 1) * PAGE_SIZE
+      const to = from + PAGE_SIZE - 1
+      let query = supabase
+        .from('transactions')
+        .select('*, categories(name, color), accounts(name)')
+        .gte('date', startDate)
+        .lte('date', endDate)
+        .order('date', { ascending: false })
+        .range(from, to)
+      if (selectedCategory) query = query.eq('category_id', selectedCategory)
+      if (selectedAccount) query = query.eq('account_id', selectedAccount)
+      const { data } = await query
+      if (data) setTransactions(data as TransactionWithDetails[])
+
+      // Auto-clear error after 5 seconds
+      setTimeout(() => setUpdateError(null), 5000)
+    }
+  }
+
+  // Handle quick action toggles
+  const handleToggle = async (field: 'is_transfer' | 'is_reviewed' | 'is_flagged', value: boolean) => {
+    if (!selectedTransaction) return
+
+    // Optimistic update
+    setSelectedTransaction(prev => prev ? { ...prev, [field]: value } : null)
+    setTransactions(prev =>
+      prev.map(t =>
+        t.id === selectedTransaction.id ? { ...t, [field]: value } : t
+      )
+    )
+
+    const { error } = await supabase
+      .from('transactions')
+      .update({ [field]: value })
+      .eq('id', selectedTransaction.id)
+
+    if (error) {
+      // Rollback on error
+      const { startDate, endDate } = getDateRange(selectedDateRange)
+      const from = (currentPage - 1) * PAGE_SIZE
+      const to = from + PAGE_SIZE - 1
+      let query = supabase
+        .from('transactions')
+        .select('*, categories(name, color), accounts(name)')
+        .gte('date', startDate)
+        .lte('date', endDate)
+        .order('date', { ascending: false })
+        .range(from, to)
+      if (selectedCategory) query = query.eq('category_id', selectedCategory)
+      if (selectedAccount) query = query.eq('account_id', selectedAccount)
+      const { data } = await query
+      if (data) setTransactions(data as TransactionWithDetails[])
     }
   }
 
@@ -529,6 +687,7 @@ export default function Transactions() {
         categories={categories}
         onClose={() => setSelectedTransaction(null)}
         onCategoryChange={handleCategoryChange}
+        onToggle={handleToggle}
       />
     </div>
   )
