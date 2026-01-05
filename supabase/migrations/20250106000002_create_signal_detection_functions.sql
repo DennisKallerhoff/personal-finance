@@ -75,6 +75,7 @@ as $$
       normalized_vendor,
       occurrence_count,
       avg_amount::integer as typical_amount,
+      avg_amount,
       amount_stddev,
       dates[array_length(dates, 1)] as last_occurrence,
       -- Calculate average days between transactions
@@ -146,7 +147,7 @@ as $$
   where t.direction = 'debit'
     and t.is_transfer = false
     and t.amount > threshold_cents
-    and t.date >= current_date - (lookback_months || ' months')::interval
+    and t.date >= current_date - make_interval(months => lookback_months)
     -- Exclude recurring (appears 2+ times with similar amount)
     and not exists (
       select 1
@@ -180,7 +181,7 @@ as $$
       sum(amount) as total_amount,
       category_id
     from transactions
-    where date >= current_date - (lookback_days || ' days')::interval
+    where date >= current_date - make_interval(days => lookback_days)
       and direction = 'debit'
       and is_transfer = false
       and normalized_vendor is not null
@@ -197,7 +198,7 @@ as $$
     select 1
     from transactions t
     where t.normalized_vendor = rt.normalized_vendor
-      and t.date < current_date - (lookback_days || ' days')::interval
+      and t.date < current_date - make_interval(days => lookback_days)
       and t.date >= current_date - interval '12 months'
   )
   order by rt.first_occurrence desc;
