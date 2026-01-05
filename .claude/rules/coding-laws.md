@@ -171,6 +171,33 @@ Never log PII (full names, addresses) — vendor names are OK.
 
 ---
 
+## Git Workflow Laws
+
+### 20. Feature branch workflow is mandatory
+
+- NEVER commit directly to `main` branch
+- Create a feature branch for every feature, bugfix, or phase
+- Branch naming: `phase-N-description` or `feature/description` or `fix/description`
+- Example: `phase-5-transaction-editing`, `feature/comments-system`, `fix/category-dropdown`
+- Merge via pull request after implementation is complete
+- Delete feature branch after merge
+
+```bash
+# Good: Feature branch workflow
+git checkout -b phase-5-transaction-editing
+# ... make changes ...
+git commit -m "Implement Phase 5"
+git push -u origin phase-5-transaction-editing
+# Create PR, review, merge
+
+# Bad: Direct to main
+git checkout main
+git commit -m "Add feature"
+git push origin main
+```
+
+---
+
 ## Interpretation
 
 These laws intentionally favor:
