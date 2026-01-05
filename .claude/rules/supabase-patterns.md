@@ -261,6 +261,89 @@ const apiKey = Deno.env.get("ANTHROPIC_API_KEY")
 if (!apiKey) throw new BadInputError("ANTHROPIC_API_KEY not configured")
 ```
 
+### API Keys and Authentication
+
+Supabase uses different keys for different purposes:
+
+| Key | Purpose | Access Level | Use When |
+|-----|---------|--------------|----------|
+| `anon` key | Client-side requests | RLS-restricted | Browser/frontend code |
+| `service_role` key | Server-side bypass | Full access, bypasses RLS | Edge Functions, admin scripts |
+
+**Client-side (browser):**
+```typescript
+// Uses anon key - requests go through RLS
+const supabase = createClient(url, anonKey)
+```
+
+**Edge Functions calling other services:**
+```typescript
+// Service role for admin operations (bypasses RLS)
+const supabase = createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'))
+
+// Or: Use user's token to maintain RLS context
+const supabase = createClient(url, anonKey, {
+  global: { headers: { Authorization: req.headers.get('Authorization') } }
+})
+```
+
+**Calling Edge Functions from client:**
+```typescript
+// Pass user's access token to Edge Function
+const { data: { session } } = await supabase.auth.getSession()
+
+const response = await fetch(`${SUPABASE_URL}/functions/v1/my-function`, {
+  method: 'POST',
+  headers: {
+    'Authorization': `Bearer ${session.access_token}`,
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify(payload)
+})
+```
+
+**Edge Function receiving auth:**
+```typescript
+// Verify user is authenticated
+const authHeader = req.headers.get('Authorization')
+const supabase = createClient(url, anonKey, {
+  global: { headers: { Authorization: authHeader } }
+})
+
+const { data: { user }, error } = await supabase.auth.getUser()
+if (error || !user) {
+  return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 })
+}
+```
+
+### Testing Edge Functions with curl
+
+Always test Edge Functions with curl before debugging browser issues:
+
+```bash
+# Get a fresh access token (or copy from browser localStorage)
+# Key: sb-<project-ref>-auth-token -> access_token
+
+# Test Edge Function
+curl -X POST "https://<project>.supabase.co/functions/v1/my-function" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"key": "value"}'
+
+# Test RPC function
+curl -X POST "https://<project>.supabase.co/rest/v1/rpc/my_function" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "apikey: $ANON_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"param": "value"}'
+```
+
+**Why curl first:**
+- Isolates API issues from browser/JavaScript issues
+- Shows exact error messages without React error boundaries
+- Confirms auth tokens are valid
+- Verifies function exists and is deployed
+
 ---
 
 ## Migration Patterns
@@ -633,22 +716,6 @@ RPC calls can return **404** for multiple reasons:
 1. Test RPC with curl to isolate browser vs API issues
 2. Check for error code in response (42883 = undefined_function)
 3. The error might be in a **nested function call**, not the RPC itself
-
-### PostgreSQL DATE Arithmetic
-
-**Gotcha:** `DATE - DATE` returns INTEGER (days), not an interval.
-
-```sql
--- BAD: EXTRACT expects interval, not integer
-ORDER BY ABS(EXTRACT(EPOCH FROM (t.date - p_date)))
--- Error: function pg_catalog.extract(unknown, integer) does not exist
-
--- GOOD: Use integer directly (it's already days)
-ORDER BY ABS(t.date - p_date)
-
--- ALSO GOOD: Cast to timestamp first
-ORDER BY ABS(EXTRACT(EPOCH FROM (t.date::timestamp - p_date::timestamp)))
-```
 
 ### Type Regeneration After Migrations
 
