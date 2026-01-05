@@ -297,8 +297,8 @@ export default function Import() {
       .insert({
         filename,
         account_id: selectedAccountId,
-        status: warnings.length > 0 ? 'completed' : 'completed',
-        transactions_count: transactions.length,
+        status: 'processing',
+        transactions_count: 0,  // Will be updated after processing
         file_hash: fileHash,
         errors: [],
         warnings: warnings
@@ -308,26 +308,83 @@ export default function Import() {
 
     if (jobError) throw jobError
 
-    // Insert transactions
-    const transactionsToInsert: TransactionInsert[] = transactions.map(tx => ({
-      account_id: selectedAccountId,
-      import_job_id: importJob.id,
-      date: tx.date,
-      amount: tx.amount,
-      direction: tx.direction,
-      raw_vendor: tx.raw_vendor,
-      description: tx.description,
-      category_id: null,
-      confidence: null,
-      is_transfer: tx.metadata?.is_transfer === 'true',
-      is_reviewed: false,
-    }))
+    // Process transactions with classification, deduplication, and transfer detection
+    const { data: stats, error: importError } = await supabase
+      .rpc('import_transactions_batch', {
+        p_account_id: selectedAccountId,
+        p_import_job_id: importJob.id,
+        p_transactions: transactions
+      })
 
-    const { error: txError } = await supabase
+    if (importError) throw importError
+
+    // Update import job with final statistics
+    const result = stats?.[0]
+    await supabase
+      .from('import_jobs')
+      .update({
+        status: 'completed',
+        transactions_count: result?.inserted_count || 0,
+        duplicates_count: result?.duplicate_count || 0
+      })
+      .eq('id', importJob.id)
+
+    // Classify unknown vendors with LLM
+    await classifyUnknownTransactions(importJob.id)
+  }
+
+  const classifyUnknownTransactions = async (importJobId: string) => {
+    // Fetch transactions with null category_id from this import
+    const { data: unclassified } = await supabase
       .from('transactions')
-      .insert(transactionsToInsert)
+      .select('id, raw_vendor, normalized_vendor, description, amount, direction')
+      .eq('import_job_id', importJobId)
+      .is('category_id', null)
 
-    if (txError) throw txError
+    if (!unclassified || unclassified.length === 0) {
+      return  // All transactions were classified by rules
+    }
+
+    console.log(`Classifying ${unclassified.length} unknown vendors with LLM...`)
+
+    // Get session for auth
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) return
+
+    // Call LLM classifier for each unknown transaction
+    const classificationPromises = unclassified.map(async (tx) => {
+      try {
+        const response = await fetch(
+          `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/classify-transaction`,
+          {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${session.access_token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              transaction_id: tx.id,
+              raw_vendor: tx.raw_vendor,
+              normalized_vendor: tx.normalized_vendor,
+              description: tx.description,
+              amount: tx.amount,
+              direction: tx.direction,
+            }),
+          }
+        )
+
+        const result = await response.json()
+        return result
+      } catch (e) {
+        console.error('LLM classification failed for', tx.normalized_vendor, e)
+        return { success: false }
+      }
+    })
+
+    // Wait for all classifications to complete
+    await Promise.all(classificationPromises)
+
+    console.log('LLM classification complete')
   }
 
   const handleDeleteImport = async (importId: string) => {

@@ -6,6 +6,7 @@ import { parseING } from "../shared/pdf/ing-parser.ts";
 import { parseDKB } from "../shared/pdf/dkb-parser.ts";
 import { BadInputError, UpstreamFailError } from "../shared/errors.ts";
 import type { ParseResult } from "../shared/pdf/types.ts";
+import { normalizeVendor } from "../shared/vendor-normalization.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -92,6 +93,12 @@ serve(async (req: Request) => {
     } else {
       throw new BadInputError(`Unknown bank type: ${detectedBank}`);
     }
+
+    // Normalize vendors for all transactions
+    parseResult.transactions = parseResult.transactions.map(tx => ({
+      ...tx,
+      normalized_vendor: normalizeVendor(tx.raw_vendor)
+    }));
 
     // Return parsed transactions
     return new Response(
