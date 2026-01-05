@@ -21,9 +21,11 @@ export interface ParseResult {
   warnings: ParseWarning[];
   metadata: {
     bank: 'ing' | 'dkb';
+    format?: 'pdf' | 'csv';
     account_number?: string;
     statement_period?: string;
-    pages_parsed: number;
-    raw_lines: number;
+    pages_parsed?: number;
+    raw_lines?: number;
+    rows_parsed?: number;
   };
 }
