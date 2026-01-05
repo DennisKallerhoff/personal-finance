@@ -575,3 +575,124 @@ channel.unsubscribe()
 ```
 
 **Use sparingly** — Only for features that genuinely need real-time updates.
+
+---
+
+## Common Pitfalls
+
+### PostgREST Schema Cache
+
+After deploying migrations that add new **functions** or **tables**, PostgREST won't see them until its schema cache is reloaded:
+
+```sql
+-- Run in SQL Editor after migrations
+NOTIFY pgrst, 'reload schema';
+```
+
+**Symptoms:** RPC calls return 404 even though the function exists in the database.
+
+**When this happens:**
+- After `supabase db push` with new functions
+- After manual SQL that creates functions
+- After adding new tables (for REST endpoints)
+
+### .single() vs .maybeSingle()
+
+**CRITICAL:** Use `.maybeSingle()` when the query might return 0 or 1 rows.
+
+```typescript
+// BAD: Throws 406 error when no rows found
+const { data } = await supabase
+  .from('import_jobs')
+  .select('*')
+  .eq('file_hash', hash)
+  .single()  // 406 if 0 rows!
+
+// GOOD: Returns null when no rows found
+const { data } = await supabase
+  .from('import_jobs')
+  .select('*')
+  .eq('file_hash', hash)
+  .maybeSingle()  // null if 0 rows
+```
+
+**Rule:** Only use `.single()` when you're certain exactly 1 row exists (e.g., fetching by primary key after confirming existence).
+
+### RPC Error Debugging
+
+RPC calls can return **404** for multiple reasons:
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| 404 after migration | Schema cache stale | `NOTIFY pgrst, 'reload schema'` |
+| 404 + error 42883 | Function has internal type error | Check function SQL for type mismatches |
+| 404 | Function doesn't exist | Verify migration was applied |
+| TypeScript error "never" | Types not regenerated | `supabase gen types typescript` |
+
+**Debugging approach:**
+1. Test RPC with curl to isolate browser vs API issues
+2. Check for error code in response (42883 = undefined_function)
+3. The error might be in a **nested function call**, not the RPC itself
+
+### PostgreSQL DATE Arithmetic
+
+**Gotcha:** `DATE - DATE` returns INTEGER (days), not an interval.
+
+```sql
+-- BAD: EXTRACT expects interval, not integer
+ORDER BY ABS(EXTRACT(EPOCH FROM (t.date - p_date)))
+-- Error: function pg_catalog.extract(unknown, integer) does not exist
+
+-- GOOD: Use integer directly (it's already days)
+ORDER BY ABS(t.date - p_date)
+
+-- ALSO GOOD: Cast to timestamp first
+ORDER BY ABS(EXTRACT(EPOCH FROM (t.date::timestamp - p_date::timestamp)))
+```
+
+### Type Regeneration After Migrations
+
+After adding new **functions**, **tables**, or **views**, regenerate TypeScript types:
+
+```bash
+# For linked project
+supabase gen types typescript --project-ref <ref> > web/src/types/database.ts
+
+# For local development
+supabase gen types typescript --local > web/src/types/database.ts
+```
+
+**Symptoms of stale types:**
+- TypeScript error: `Argument of type '"function_name"' is not assignable to parameter of type 'never'`
+- RPC calls fail at compile time
+- New columns not available in type hints
+
+### Supabase Client Query Gotchas
+
+```typescript
+// Checking for null in RLS-enabled tables
+// BAD: This doesn't work as expected
+.is('category_id', null)
+
+// GOOD: Use correct null check
+.is('category_id', null)  // Actually this IS correct, just verify RLS allows it
+
+// Handling nullable booleans from database
+// BAD: Type error with null
+checked={transaction.is_transfer}  // Error if is_transfer can be null
+
+// GOOD: Nullish coalescing
+checked={transaction.is_transfer ?? false}
+```
+
+---
+
+## Deployment Checklist
+
+After deploying migrations with new functions:
+
+1. [ ] Run `NOTIFY pgrst, 'reload schema';` in SQL Editor
+2. [ ] Regenerate TypeScript types
+3. [ ] Test RPC calls with curl before browser testing
+4. [ ] Check browser console for specific error codes
+5. [ ] Verify function exists: `SELECT proname FROM pg_proc WHERE proname = 'function_name';`
