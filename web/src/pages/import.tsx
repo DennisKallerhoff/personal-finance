@@ -2,7 +2,8 @@ import { useState, useRef, useEffect } from 'react'
 import { Upload, AlertTriangle, CheckCircle, Trash2 } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { supabase, type Account, type TransactionInsert, type ImportJob } from '@/lib/supabase'
+import { supabase, type Account, type ImportJob } from '@/lib/supabase'
+import type { Json } from '@/types/database'
 import { useAuth } from '@/hooks/use-auth'
 
 // Compute SHA-256 hash of file for duplicate detection
@@ -313,7 +314,7 @@ export default function Import() {
       .rpc('import_transactions_batch', {
         p_account_id: selectedAccountId,
         p_import_job_id: importJob.id,
-        p_transactions: transactions
+        p_transactions: transactions as unknown as Json
       })
 
     if (importError) throw importError

@@ -129,7 +129,7 @@ function TransactionDrawer({ transaction, categories, onClose, onCategoryChange 
                 <label className="flex items-center gap-2 cursor-pointer font-medium">
                   <input
                     type="checkbox"
-                    checked={transaction.is_transfer}
+                    checked={transaction.is_transfer ?? false}
                     readOnly
                     className="accent-primary w-4 h-4"
                   />
@@ -138,7 +138,7 @@ function TransactionDrawer({ transaction, categories, onClose, onCategoryChange 
                 <label className="flex items-center gap-2 cursor-pointer font-medium">
                   <input
                     type="checkbox"
-                    checked={transaction.is_reviewed}
+                    checked={transaction.is_reviewed ?? false}
                     readOnly
                     className="accent-primary w-4 h-4"
                   />
