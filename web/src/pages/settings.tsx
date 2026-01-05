@@ -1,28 +1,11 @@
+import React, { useState, useEffect } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { supabase, type Account, type Category, type VendorRule } from '@/lib/supabase'
 
-// Mock data - will be replaced with real data from Supabase
-const MOCK_ACCOUNTS = [
-  { id: '1', name: 'ING Main', color: '#f97316', status: 'active' },
-  { id: '2', name: 'Credit Card (Visa)', color: '#2563eb', status: 'active' },
-]
-
-const MOCK_CATEGORIES = [
-  'Groceries',
-  'Rent/Utilities',
-  'Dining Out',
-  'Transport',
-  'Entertainment',
-  'Household',
-  'Insurance',
-]
-
-const MOCK_VENDOR_RULES = [
-  { id: '1', pattern: 'AMAZON.*', mapsTo: 'Amazon', category: null },
-  { id: '2', pattern: 'REWE.*', mapsTo: 'REWE', category: 'Groceries' },
-  { id: '3', pattern: 'PAYPAL *SPOTIFY', mapsTo: 'Spotify', category: 'Subscriptions' },
-  { id: '4', pattern: 'DB VERTRIEB GMBH', mapsTo: 'DB Bahn', category: 'Transport' },
-]
+interface VendorRuleWithCategory extends VendorRule {
+  categories?: { name: string } | null
+}
 
 function StatusBadge({ status }: { status: string }) {
   if (status === 'active') {
@@ -40,6 +23,34 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 export default function Settings() {
+  const [accounts, setAccounts] = useState<Account[]>([])
+  const [categories, setCategories] = useState<Category[]>([])
+  const [vendorRules, setVendorRules] = useState<VendorRuleWithCategory[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    const fetchData = async () => {
+      const [{ data: accs }, { data: cats }, { data: rules }] = await Promise.all([
+        supabase.from('accounts').select('*').order('name'),
+        supabase.from('categories').select('*').order('sort_order'),
+        supabase.from('vendor_rules').select('*, categories(name)').order('priority', { ascending: false }),
+      ])
+      if (accs) setAccounts(accs)
+      if (cats) setCategories(cats)
+      if (rules) setVendorRules(rules as VendorRuleWithCategory[])
+      setLoading(false)
+    }
+    fetchData()
+  }, [])
+
+  // Build category hierarchy: parent categories with their children
+  const parentCategories = categories.filter(c => c.parent_id === null)
+  const getChildren = (parentId: string) => categories.filter(c => c.parent_id === parentId)
+
+  if (loading) {
+    return <div className="p-8 text-center text-muted-foreground">Loading settings...</div>
+  }
+
   return (
     <div>
       <h2 className="text-3xl font-bold mb-8">Settings</h2>
@@ -69,22 +80,22 @@ export default function Settings() {
                 </tr>
               </thead>
               <tbody>
-                {MOCK_ACCOUNTS.map((account) => (
+                {accounts.map((account) => (
                   <tr key={account.id} className="hover:bg-[#fafafa]">
                     <td className="py-4 border-b border-border">
                       <div className="flex items-center gap-3 font-semibold">
                         <div
                           className="w-3 h-3 rounded-full"
                           style={{
-                            backgroundColor: account.color,
-                            boxShadow: `0 0 0 2px ${account.color}33`,
+                            backgroundColor: account.color || '#888',
+                            boxShadow: `0 0 0 2px ${account.color || '#888'}33`,
                           }}
                         />
                         {account.name}
                       </div>
                     </td>
                     <td className="py-4 border-b border-border">
-                      <StatusBadge status={account.status} />
+                      <StatusBadge status={account.is_active ? 'active' : 'inactive'} />
                     </td>
                     <td className="py-4 border-b border-border text-right">
                       <Button variant="outline" size="sm">
@@ -144,17 +155,39 @@ export default function Settings() {
             <div className="max-h-[400px] overflow-y-auto pr-2">
               <table className="w-full text-[15px]">
                 <tbody>
-                  {MOCK_CATEGORIES.map((category) => (
-                    <tr key={category} className="hover:bg-[#fafafa]">
-                      <td className="py-3 border-b border-border font-medium">
-                        {category}
-                      </td>
-                      <td className="py-3 border-b border-border text-right">
-                        <Button variant="outline" size="sm">
-                          Edit
-                        </Button>
-                      </td>
-                    </tr>
+                  {parentCategories.map((parent) => (
+                    <React.Fragment key={parent.id}>
+                      {/* Parent category */}
+                      <tr className="hover:bg-[#fafafa]">
+                        <td className="py-3 border-b border-border">
+                          <div className="flex items-center gap-2 font-semibold">
+                            <span>{parent.icon}</span>
+                            <span>{parent.name}</span>
+                          </div>
+                        </td>
+                        <td className="py-3 border-b border-border text-right">
+                          <Button variant="outline" size="sm">
+                            Edit
+                          </Button>
+                        </td>
+                      </tr>
+                      {/* Child categories */}
+                      {getChildren(parent.id).map((child) => (
+                        <tr key={child.id} className="hover:bg-[#fafafa] bg-muted/30">
+                          <td className="py-2 border-b border-border pl-8">
+                            <div className="flex items-center gap-2 text-muted-foreground">
+                              <span className="text-sm">{child.icon}</span>
+                              <span>{child.name}</span>
+                            </div>
+                          </td>
+                          <td className="py-2 border-b border-border text-right">
+                            <Button variant="ghost" size="sm">
+                              Edit
+                            </Button>
+                          </td>
+                        </tr>
+                      ))}
+                    </React.Fragment>
                   ))}
                 </tbody>
               </table>
@@ -190,21 +223,32 @@ export default function Settings() {
                   </tr>
                 </thead>
                 <tbody>
-                  {MOCK_VENDOR_RULES.map((rule) => (
-                    <tr key={rule.id} className="hover:bg-[#fafafa]">
-                      <td className="py-3 border-b border-border">
-                        <code className="bg-muted px-2 py-1 rounded text-primary text-sm">
-                          {rule.pattern}
-                        </code>
-                      </td>
-                      <td className="py-3 border-b border-border font-semibold">
-                        {rule.mapsTo}
-                      </td>
-                      <td className="py-3 border-b border-border text-muted-foreground italic">
-                        {rule.category || '(Keep)'}
+                  {vendorRules.length === 0 ? (
+                    <tr>
+                      <td colSpan={3} className="py-6 text-center text-muted-foreground">
+                        No vendor rules defined yet.
                       </td>
                     </tr>
-                  ))}
+                  ) : (
+                    vendorRules.map((rule) => (
+                      <tr key={rule.id} className="hover:bg-[#fafafa]">
+                        <td className="py-3 border-b border-border">
+                          <code className="bg-muted px-2 py-1 rounded text-primary text-sm">
+                            {rule.match_pattern}
+                          </code>
+                          <span className="ml-2 text-xs text-muted-foreground">
+                            ({rule.match_type})
+                          </span>
+                        </td>
+                        <td className="py-3 border-b border-border font-semibold">
+                          {rule.normalized_vendor}
+                        </td>
+                        <td className="py-3 border-b border-border text-muted-foreground italic">
+                          {rule.categories?.name || '(Keep)'}
+                        </td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>
