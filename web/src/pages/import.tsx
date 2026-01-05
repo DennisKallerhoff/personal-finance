@@ -63,7 +63,7 @@ function DropZone({ onFilesSelected }: { onFilesSelected: (files: FileList) => v
         strokeWidth={1.5}
       />
       <p className="font-heading font-bold text-xl text-primary m-0">
-        Drag & Drop PDF files here
+        Drag & Drop PDF or CSV files here
       </p>
       <p className="text-muted-foreground mt-3 m-0">
         or click to browse files
@@ -71,7 +71,7 @@ function DropZone({ onFilesSelected }: { onFilesSelected: (files: FileList) => v
       <input
         ref={fileInputRef}
         type="file"
-        accept=".pdf"
+        accept=".pdf,.csv"
         className="hidden"
         onChange={(e) => e.target.files && onFilesSelected(e.target.files)}
       />
@@ -159,6 +159,14 @@ export default function Import() {
   const [selectedImport, setSelectedImport] = useState<ImportJobWithAccount | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
 
+  // Import progress tracking
+  const [importStage, setImportStage] = useState<'parsing' | 'saving' | 'classifying' | 'complete'>('parsing')
+  const [classificationStats, setClassificationStats] = useState<{
+    total: number
+    classified: number
+    unclassified: number
+  } | null>(null)
+
   // Fetch accounts and import history on mount
   useEffect(() => {
     const fetchData = async () => {
@@ -209,8 +217,9 @@ export default function Import() {
     }
 
     // Validate file type
-    if (!file.name.toLowerCase().endsWith('.pdf')) {
-      setError('Only PDF files are supported')
+    const fileName = file.name.toLowerCase()
+    if (!fileName.endsWith('.pdf') && !fileName.endsWith('.csv')) {
+      setError('Only PDF and CSV files are supported')
       return
     }
 
@@ -225,6 +234,8 @@ export default function Import() {
     setError(null)
     setParseResult(null)
     setImportSuccess(false)
+    setImportStage('parsing')
+    setClassificationStats(null)
 
     try {
       // Check for duplicate file before uploading
@@ -273,7 +284,9 @@ export default function Import() {
 
       // Auto-save transactions to database (reuse fileHash computed earlier)
       if (result.transactions && result.transactions.length > 0) {
+        setImportStage('saving')
         await saveTransactions(result.transactions, file.name, fileHash, result.warnings || [])
+        setImportStage('complete')
         setImportSuccess(true)
         // Refresh import history
         await fetchImportHistory()
@@ -335,17 +348,37 @@ export default function Import() {
   }
 
   const classifyUnknownTransactions = async (importJobId: string) => {
-    // Fetch transactions with null category_id from this import
-    const { data: unclassified } = await supabase
+    // Fetch all transactions from this import to get total counts
+    const { data: allTransactions } = await supabase
       .from('transactions')
-      .select('id, raw_vendor, normalized_vendor, description, amount, direction')
+      .select('id, category_id')
       .eq('import_job_id', importJobId)
-      .is('category_id', null)
 
-    if (!unclassified || unclassified.length === 0) {
+    const total = allTransactions?.length || 0
+    const alreadyClassified = allTransactions?.filter(t => t.category_id !== null).length || 0
+    const unclassifiedIds = allTransactions?.filter(t => t.category_id === null).map(t => t.id) || []
+
+    // Update stats
+    setClassificationStats({
+      total,
+      classified: alreadyClassified,
+      unclassified: unclassifiedIds.length
+    })
+
+    if (unclassifiedIds.length === 0) {
+      console.log('All transactions classified by vendor rules!')
       return  // All transactions were classified by rules
     }
 
+    // Fetch full details for unclassified transactions
+    const { data: unclassified } = await supabase
+      .from('transactions')
+      .select('id, raw_vendor, normalized_vendor, description, amount, direction')
+      .in('id', unclassifiedIds)
+
+    if (!unclassified || unclassified.length === 0) return
+
+    setImportStage('classifying')
     console.log(`Classifying ${unclassified.length} unknown vendors with LLM...`)
 
     // Get session for auth
@@ -386,6 +419,13 @@ export default function Import() {
     await Promise.all(classificationPromises)
 
     console.log('LLM classification complete')
+
+    // Update stats after classification
+    setClassificationStats(prev => prev ? {
+      ...prev,
+      classified: prev.total,
+      unclassified: 0
+    } : null)
   }
 
   const handleDeleteImport = async (importId: string) => {
@@ -457,8 +497,29 @@ export default function Import() {
           <Card>
             <CardContent className="p-16 text-center">
               <div className="animate-spin rounded-full h-16 w-16 border-b-4 border-primary mx-auto mb-4"></div>
-              <p className="font-heading font-bold text-xl text-primary">Processing PDF...</p>
-              <p className="text-muted-foreground mt-2">Extracting transactions</p>
+              {importStage === 'parsing' && (
+                <>
+                  <p className="font-heading font-bold text-xl text-primary">Parsing file...</p>
+                  <p className="text-muted-foreground mt-2">Extracting transactions from document</p>
+                </>
+              )}
+              {importStage === 'saving' && (
+                <>
+                  <p className="font-heading font-bold text-xl text-primary">Saving transactions...</p>
+                  <p className="text-muted-foreground mt-2">Importing to database and applying vendor rules</p>
+                </>
+              )}
+              {importStage === 'classifying' && (
+                <>
+                  <p className="font-heading font-bold text-xl text-primary">Classifying with AI...</p>
+                  <p className="text-muted-foreground mt-2">
+                    {classificationStats
+                      ? `Classifying ${classificationStats.unclassified} unknown vendors with Claude`
+                      : 'Using AI to categorize unknown vendors'
+                    }
+                  </p>
+                </>
+              )}
             </CardContent>
           </Card>
         ) : (
@@ -491,6 +552,41 @@ export default function Import() {
                 </p>
               </div>
             </div>
+
+            {/* Classification Stats */}
+            {classificationStats && (
+              <div className="bg-muted rounded-lg p-4 mb-4">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-3">
+                  Classification Summary
+                </h4>
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <div className="text-2xl font-heading font-bold text-[#4CAF50]">
+                      {classificationStats.classified}
+                    </div>
+                    <div className="text-xs text-muted-foreground mt-1">
+                      Auto-classified by rules
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-2xl font-heading font-bold text-[#FF9800]">
+                      {classificationStats.total - classificationStats.classified}
+                    </div>
+                    <div className="text-xs text-muted-foreground mt-1">
+                      Classified by AI
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-2xl font-heading font-bold">
+                      {classificationStats.total}
+                    </div>
+                    <div className="text-xs text-muted-foreground mt-1">
+                      Total transactions
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div className="grid grid-cols-3 gap-4 mb-4">
               <div className="bg-muted rounded-lg p-4">
@@ -547,7 +643,7 @@ export default function Import() {
           </h3>
           {importHistory.length === 0 ? (
             <p className="text-muted-foreground text-center py-8">
-              No imports yet. Upload a PDF to get started.
+              No imports yet. Upload a PDF or CSV file to get started.
             </p>
           ) : (
             <table className="w-full">
