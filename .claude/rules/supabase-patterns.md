@@ -263,29 +263,48 @@ if (!apiKey) throw new BadInputError("ANTHROPIC_API_KEY not configured")
 
 ### API Keys and Authentication
 
-Supabase uses different keys for different purposes:
+Supabase has two key formats. **Use the new format** for new projects:
 
-| Key | Purpose | Access Level | Use When |
-|-----|---------|--------------|----------|
-| `anon` key | Client-side requests | RLS-restricted | Browser/frontend code |
-| `service_role` key | Server-side bypass | Full access, bypasses RLS | Edge Functions, admin scripts |
+| Key Format | Type | Access Level | Use When |
+|------------|------|--------------|----------|
+| `sb_publishable_xxx` | **Publishable** | RLS-restricted | Browser, mobile, CLI, public code |
+| `sb_secret_xxx` | **Secret** | Bypasses RLS | Server-side only, Edge Functions |
+
+**Legacy keys** (JWT format, will be deprecated):
+
+| Key | Equivalent | Notes |
+|-----|------------|-------|
+| `anon` key | Publishable | Can only rotate by changing JWT secret (risky) |
+| `service_role` key | Secret | Can only rotate by changing JWT secret (risky) |
+
+**Why prefer new keys:**
+- Can be rotated independently without affecting other keys
+- Legacy keys require JWT secret rotation which breaks all existing tokens
+- New keys are managed separately in Dashboard → Settings → API Keys
 
 **Client-side (browser):**
 ```typescript
-// Uses anon key - requests go through RLS
-const supabase = createClient(url, anonKey)
+// Uses publishable key - requests go through RLS
+const supabase = createClient(url, import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY)
 ```
 
-**Edge Functions calling other services:**
+**Edge Functions:**
 ```typescript
-// Service role for admin operations (bypasses RLS)
-const supabase = createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'))
+// Option 1: Use user's token to maintain RLS context (preferred)
+const supabase = createClient(
+  Deno.env.get('SUPABASE_URL'),
+  Deno.env.get('SUPABASE_ANON_KEY'),  // Supabase provides this automatically
+  { global: { headers: { Authorization: req.headers.get('Authorization') } } }
+)
 
-// Or: Use user's token to maintain RLS context
-const supabase = createClient(url, anonKey, {
-  global: { headers: { Authorization: req.headers.get('Authorization') } }
-})
+// Option 2: Bypass RLS for admin operations
+const supabase = createClient(
+  Deno.env.get('SUPABASE_URL'),
+  Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')  // Never expose this
+)
 ```
+
+> **Note:** Edge Functions receive `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` automatically from Supabase. These are legacy JWT keys but work fine for Edge Functions.
 
 **Calling Edge Functions from client:**
 ```typescript
@@ -576,7 +595,7 @@ import type { Database } from '../types/database'
 
 export const supabase = createClient<Database>(
   import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_ANON_KEY
+  import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
 )
 ```
 
