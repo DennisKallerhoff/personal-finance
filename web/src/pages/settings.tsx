@@ -31,10 +31,13 @@ export default function Settings() {
   const [vendorRules, setVendorRules] = useState<VendorRuleWithCategory[]>([])
   const [loading, setLoading] = useState(true)
 
+  // Search state
+  const [vendorRuleSearch, setVendorRuleSearch] = useState('')
+
   // Edit dialog state
   const [editingAccount, setEditingAccount] = useState<Account | null>(null)
   const [editingCategory, setEditingCategory] = useState<Category | null>(null)
-  const [editFormData, setEditFormData] = useState<{ name: string; color?: string; icon?: string }>({})
+  const [editFormData, setEditFormData] = useState<{ name: string; color?: string; icon?: string }>({ name: '' })
 
   useEffect(() => {
     const fetchData = async () => {
@@ -54,6 +57,17 @@ export default function Settings() {
   // Build category hierarchy: parent categories with their children
   const parentCategories = categories.filter(c => c.parent_id === null)
   const getChildren = (parentId: string) => categories.filter(c => c.parent_id === parentId)
+
+  // Filter vendor rules based on search
+  const filteredVendorRules = vendorRules.filter((rule) => {
+    if (!vendorRuleSearch) return true
+    const searchLower = vendorRuleSearch.toLowerCase()
+    return (
+      rule.match_pattern.toLowerCase().includes(searchLower) ||
+      rule.normalized_vendor.toLowerCase().includes(searchLower) ||
+      rule.categories?.name.toLowerCase().includes(searchLower)
+    )
+  })
 
   // Edit handlers
   const handleEditAccount = (account: Account) => {
@@ -84,7 +98,7 @@ export default function Settings() {
           : a
       ))
       setEditingAccount(null)
-      setEditFormData({})
+      setEditFormData({ name: '' })
     }
   }
 
@@ -106,7 +120,7 @@ export default function Settings() {
           : c
       ))
       setEditingCategory(null)
-      setEditFormData({})
+      setEditFormData({ name: '' })
     }
   }
 
@@ -267,9 +281,18 @@ export default function Settings() {
               </h3>
               <Button size="sm">+ Add Rule</Button>
             </div>
-            <p className="text-muted-foreground text-sm mb-6">
+            <p className="text-muted-foreground text-sm mb-4">
               These rules automatically map raw vendor names to normalized names and categories.
             </p>
+            <div className="mb-4">
+              <Input
+                type="text"
+                placeholder="Search rules by pattern, vendor, or category..."
+                value={vendorRuleSearch}
+                onChange={(e) => setVendorRuleSearch(e.target.value)}
+                className="w-full"
+              />
+            </div>
             <div className="max-h-[400px] overflow-y-auto">
               <table className="w-full text-sm">
                 <thead>
@@ -286,14 +309,14 @@ export default function Settings() {
                   </tr>
                 </thead>
                 <tbody>
-                  {vendorRules.length === 0 ? (
+                  {filteredVendorRules.length === 0 ? (
                     <tr>
                       <td colSpan={3} className="py-6 text-center text-muted-foreground">
-                        No vendor rules defined yet.
+                        {vendorRuleSearch ? 'No matching rules found.' : 'No vendor rules defined yet.'}
                       </td>
                     </tr>
                   ) : (
-                    vendorRules.map((rule) => (
+                    filteredVendorRules.map((rule) => (
                       <tr key={rule.id} className="hover:bg-[#fafafa]">
                         <td className="py-3 border-b border-border">
                           <code className="bg-muted px-2 py-1 rounded text-primary text-sm">

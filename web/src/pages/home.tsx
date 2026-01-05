@@ -85,27 +85,25 @@ function MetricCard({ label, value, trend, valueColor }: {
   valueColor?: string
 }) {
   return (
-    <Card className="relative overflow-hidden">
+    <Card className="relative overflow-hidden hover:shadow-md transition-all duration-200">
       <div className="absolute top-0 left-0 w-1 h-full bg-primary opacity-50" />
-      <CardContent className="p-6">
-        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+      <CardContent className="p-8">
+        <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
           {label}
         </span>
-        <span className={`block font-heading text-4xl font-bold mt-1 ${valueColor || ''}`}>
+        <span className={`block font-heading text-4xl font-bold mt-2 mb-3 ${valueColor || 'text-secondary'}`}>
           {value}
         </span>
         {trend !== undefined && (
-          <div className="mt-2">
-            <span className={`inline-flex items-center gap-1 text-sm font-semibold px-2 py-0.5 rounded ${
-              trend > 0
-                ? 'bg-[var(--destructive-light)] text-[#991b1b]'
-                : trend < 0
-                  ? 'bg-[var(--success-light)] text-[#166534]'
-                  : 'bg-muted text-muted-foreground'
-            }`}>
-              {trend > 0 ? '▲' : trend < 0 ? '▼' : '—'} {Math.abs(trend).toFixed(1)}%
-            </span>
-          </div>
+          <span className={`inline-flex items-center gap-1 text-sm font-bold px-3 py-1 rounded ${
+            trend > 0
+              ? 'bg-[var(--destructive-light)] text-[#991b1b]'
+              : trend < 0
+                ? 'bg-[var(--success-light)] text-[#166534]'
+                : 'bg-muted text-muted-foreground'
+          }`}>
+            {trend > 0 ? '▲' : trend < 0 ? '▼' : '—'} {Math.abs(trend).toFixed(1)}%
+          </span>
         )}
       </CardContent>
     </Card>
@@ -323,11 +321,11 @@ export default function Home() {
   return (
     <div>
       {/* Header with Month Selector */}
-      <div className="flex items-center justify-between mb-8">
-        <h2 className="text-3xl font-bold">{formatMonthLong(selectedMonth)}</h2>
+      <div className="flex items-center justify-between mb-10">
+        <h2 className="text-4xl font-bold font-heading tracking-tight">{formatMonthLong(selectedMonth)}</h2>
         <div className="flex items-center gap-4">
           <Select value={selectedMonth} onValueChange={setSelectedMonth}>
-            <SelectTrigger className="w-[200px]">
+            <SelectTrigger className="w-[200px] border-2 font-semibold">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -339,7 +337,7 @@ export default function Home() {
             </SelectContent>
           </Select>
           <Link to="/import">
-            <Button className="gap-2">
+            <Button className="gap-2 shadow-md hover:shadow-lg transition-all">
               <Upload size={18} />
               Upload Statement
             </Button>
@@ -349,13 +347,26 @@ export default function Home() {
 
       {/* Tabs */}
       <Tabs defaultValue="overview" className="w-full">
-        <TabsList className="grid w-full grid-cols-3 mb-6">
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="trends">Trends</TabsTrigger>
-          <TabsTrigger value="signals" className="flex items-center gap-2">
+        <TabsList className="grid w-full grid-cols-3 mb-8 border-b-2 border-border bg-transparent h-auto p-0 rounded-none">
+          <TabsTrigger
+            value="overview"
+            className="font-heading font-bold text-base text-muted-foreground data-[state=active]:text-secondary data-[state=active]:border-b-[3px] data-[state=active]:border-primary rounded-none pb-4 data-[state=active]:bg-transparent hover:text-secondary transition-colors"
+          >
+            Overview
+          </TabsTrigger>
+          <TabsTrigger
+            value="trends"
+            className="font-heading font-bold text-base text-muted-foreground data-[state=active]:text-secondary data-[state=active]:border-b-[3px] data-[state=active]:border-primary rounded-none pb-4 data-[state=active]:bg-transparent hover:text-secondary transition-colors"
+          >
+            Trends
+          </TabsTrigger>
+          <TabsTrigger
+            value="signals"
+            className="font-heading font-bold text-base text-muted-foreground data-[state=active]:text-secondary data-[state=active]:border-b-[3px] data-[state=active]:border-primary rounded-none pb-4 data-[state=active]:bg-transparent hover:text-secondary transition-colors flex items-center gap-2"
+          >
             Signals
             {signals.length > 0 && (
-              <Badge variant="secondary" className="bg-[var(--warning-light)] text-[#92400e]">
+              <Badge variant="secondary" className="bg-[#fef3c7] text-[#92400e] font-bold text-[0.7em] px-2 py-0.5">
                 {signals.length}
               </Badge>
             )}
@@ -363,7 +374,7 @@ export default function Home() {
         </TabsList>
 
         {/* Overview Tab */}
-        <TabsContent value="overview" className="space-y-6">
+        <TabsContent value="overview" className="space-y-6 animate-in fade-in-50 duration-300">
           {/* Key Metrics */}
           <div className="grid grid-cols-3 gap-6">
             <MetricCard
@@ -384,29 +395,56 @@ export default function Home() {
           </div>
 
           {/* Top Categories */}
-          <Card>
-            <CardContent className="p-6">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-5">
-                Top 5 Categories
+          <Card className="hover:shadow-md transition-all duration-200">
+            <CardContent className="p-8">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-6">
+                Top Categories
               </h3>
               {topCategories.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground">
-                  <p>No category data available for this month.</p>
+                <div className="text-center py-12 text-muted-foreground">
+                  <p className="font-semibold">No category data available for this month.</p>
                   <p className="text-sm mt-2">Import transactions to see spending breakdown.</p>
                 </div>
               ) : (
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={topCategories.map(cat => ({
-                    name: cat.category_name,
-                    amount: cat.expenses_cents,
-                    color: cat.category_color
-                  }))}>
-                    <XAxis dataKey="name" />
-                    <YAxis tickFormatter={(v) => formatCompactAmount(v)} />
-                    <Tooltip formatter={(value) => formatAmount(value as number)} />
-                    <Bar dataKey="amount" fill="#3b82f6" />
-                  </BarChart>
-                </ResponsiveContainer>
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b-2 border-border">
+                      <th className="text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground pb-4">
+                        Category
+                      </th>
+                      <th className="text-right text-xs font-semibold uppercase tracking-wider text-muted-foreground pb-4">
+                        Amount
+                      </th>
+                      <th className="text-right text-xs font-semibold uppercase tracking-wider text-muted-foreground pb-4">
+                        Change
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {topCategories.map((cat) => {
+                      const trend = calculatePercentChange(cat.prev_month_expenses, cat.expenses_cents)
+                      return (
+                        <tr key={cat.category_name} className="border-b border-border hover:bg-[#fafafa] transition-colors">
+                          <td className="py-4 font-semibold">{cat.category_name}</td>
+                          <td className="py-4 text-right font-heading font-semibold text-base">
+                            {formatAmount(cat.expenses_cents)}
+                          </td>
+                          <td className="py-4 text-right">
+                            <span className={`inline-flex items-center text-xs font-bold px-2.5 py-1 rounded-full uppercase ${
+                              trend > 0
+                                ? 'bg-[var(--destructive-light)] text-[#991b1b]'
+                                : trend < 0
+                                  ? 'bg-[var(--success-light)] text-[#166534]'
+                                  : 'bg-muted text-muted-foreground'
+                            }`}>
+                              {trend > 0 ? '+' : ''}{trend.toFixed(0)}%
+                            </span>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
               )}
             </CardContent>
           </Card>
@@ -414,51 +452,71 @@ export default function Home() {
 
         {/* Trends Tab */}
         <TabsContent value="trends" className="space-y-6">
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between mb-4">
+          <Card className="hover:shadow-md transition-all duration-200">
+            <CardContent className="p-8">
+              <div className="flex items-center justify-between mb-6">
                 <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
                   Monthly Trends (12 Months)
                 </h3>
-                <label className="flex items-center gap-2 text-sm font-semibold cursor-pointer">
+                <label className="flex items-center gap-2 text-sm font-bold cursor-pointer">
                   <input
                     type="checkbox"
                     checked={showRollingAvg}
                     onChange={(e) => setShowRollingAvg(e.target.checked)}
-                    className="accent-primary"
+                    className="accent-primary w-4 h-4"
                   />
-                  Show 3-month average
+                  Rolling 3-month avg
                 </label>
               </div>
               {trendData.length < 2 ? (
-                <div className="text-center py-12 text-muted-foreground">
-                  <p className="font-semibold">Insufficient data for trend analysis</p>
+                <div className="text-center py-16 text-muted-foreground">
+                  <p className="font-bold text-lg">Insufficient data for trend analysis</p>
                   <p className="text-sm mt-2">Import at least 2 months of transactions to see trends.</p>
-                  <p className="text-sm">(Currently: {trendData.length} month{trendData.length !== 1 ? 's' : ''})</p>
+                  <p className="text-sm mt-1">(Currently: {trendData.length} month{trendData.length !== 1 ? 's' : ''})</p>
                 </div>
               ) : (
                 <ResponsiveContainer width="100%" height={400}>
                   <LineChart data={trendData}>
-                    <XAxis dataKey="month" tickFormatter={(m) => formatMonth(m)} />
-                    <YAxis tickFormatter={(v) => formatCompactAmount(v)} />
+                    <XAxis
+                      dataKey="month"
+                      tickFormatter={(m) => formatMonth(m)}
+                      stroke="#6b7280"
+                      style={{ fontSize: '0.8rem', fontWeight: 600 }}
+                    />
+                    <YAxis
+                      tickFormatter={(v) => formatCompactAmount(v)}
+                      stroke="#6b7280"
+                      style={{ fontSize: '0.8rem', fontWeight: 600 }}
+                    />
                     <Tooltip
                       formatter={(value) => formatAmount(value as number)}
                       labelFormatter={(label) => formatMonthLong(label)}
+                      contentStyle={{
+                        backgroundColor: 'white',
+                        border: '2px solid #e5e7eb',
+                        borderRadius: '8px',
+                        padding: '12px',
+                        fontWeight: 600
+                      }}
                     />
-                    <Legend />
+                    <Legend
+                      wrapperStyle={{ paddingTop: '20px', fontWeight: 600 }}
+                    />
                     <Line
                       type="monotone"
                       dataKey="expenses"
                       stroke="#ef4444"
                       name="Expenses"
-                      strokeWidth={2}
+                      strokeWidth={3}
+                      dot={{ r: 4, strokeWidth: 2, fill: '#fff' }}
                     />
                     <Line
                       type="monotone"
                       dataKey="income"
                       stroke="#22c55e"
                       name="Income"
-                      strokeWidth={2}
+                      strokeWidth={3}
+                      dot={{ r: 4, strokeWidth: 2, fill: '#fff' }}
                     />
                     {showRollingAvg && (
                       <Line
@@ -466,8 +524,9 @@ export default function Home() {
                         dataKey="rolling_avg_3m"
                         stroke="#3b82f6"
                         name="3-Month Avg"
-                        strokeWidth={2}
+                        strokeWidth={3}
                         strokeDasharray="5 5"
+                        dot={{ r: 4, strokeWidth: 2, fill: '#fff' }}
                       />
                     )}
                   </LineChart>
@@ -478,13 +537,13 @@ export default function Home() {
         </TabsContent>
 
         {/* Signals Tab */}
-        <TabsContent value="signals" className="space-y-4">
+        <TabsContent value="signals" className="space-y-6">
           {signals.length === 0 ? (
-            <Card>
-              <CardContent className="p-12 text-center">
-                <div className="text-6xl mb-4">🎉</div>
-                <h3 className="text-xl font-bold mb-2">Alles im grünen Bereich!</h3>
-                <p className="text-muted-foreground">
+            <Card className="hover:shadow-md transition-all duration-200">
+              <CardContent className="p-16 text-center">
+                <div className="text-7xl mb-6">🎉</div>
+                <h3 className="text-2xl font-bold mb-3">Alles im grünen Bereich!</h3>
+                <p className="text-muted-foreground text-base max-w-lg mx-auto">
                   No unusual patterns detected. Signals appear when spending changes significantly,
                   new subscriptions are found, or large one-time expenses occur.
                 </p>
@@ -492,39 +551,42 @@ export default function Home() {
             </Card>
           ) : (
             signals.map((signal) => (
-              <Card key={signal.id} className={`border-l-4 ${
-                signal.severity === 'alert' ? 'border-l-red-500' :
-                signal.severity === 'warning' ? 'border-l-amber-500' :
-                'border-l-blue-500'
-              }`}>
-                <CardContent className="p-6">
+              <Card
+                key={signal.id}
+                className={`border-l-[6px] hover:shadow-md transition-all duration-200 ${
+                  signal.severity === 'alert' ? 'border-l-[#ef4444]' :
+                  signal.severity === 'warning' ? 'border-l-[#f59e0b]' :
+                  'border-l-[#3b82f6]'
+                }`}
+              >
+                <CardContent className="p-8">
                   <div className="flex items-start justify-between">
-                    <div className="flex items-start gap-3 flex-1">
-                      <div className={`p-2 rounded-lg ${
-                        signal.severity === 'alert' ? 'bg-red-100 text-red-700' :
-                        signal.severity === 'warning' ? 'bg-amber-100 text-amber-700' :
-                        'bg-blue-100 text-blue-700'
+                    <div className="flex items-start gap-6 flex-1">
+                      <div className={`flex items-center justify-center w-12 h-12 rounded-full text-2xl ${
+                        signal.severity === 'alert' ? 'bg-[#fee2e2] text-[#ef4444]' :
+                        signal.severity === 'warning' ? 'bg-[#fef3c7] text-[#f59e0b]' :
+                        'bg-[#dbeafe] text-[#3b82f6]'
                       }`}>
                         {signal.type === 'TREND_UP' || signal.type === 'TREND_DOWN' ? (
-                          <TrendingUp size={20} />
+                          <TrendingUp size={24} />
                         ) : signal.type === 'SUBSCRIPTION' ? (
-                          <Bell size={20} />
+                          <Bell size={24} />
                         ) : (
-                          <AlertTriangle size={20} />
+                          <AlertTriangle size={24} />
                         )}
                       </div>
                       <div className="flex-1">
-                        <h4 className="font-bold mb-1">{signal.title}</h4>
-                        <p className="text-sm text-muted-foreground">{signal.description}</p>
+                        <h4 className="font-bold text-lg mb-1">{signal.title}</h4>
+                        <p className="text-muted-foreground">{signal.description}</p>
                       </div>
                     </div>
                     <Button
                       variant="ghost"
                       size="sm"
                       onClick={() => handleDismissSignal(signal.id, signal.type)}
-                      className="ml-4"
+                      className="ml-4 hover:bg-muted"
                     >
-                      <X size={16} />
+                      <X size={18} />
                     </Button>
                   </div>
                 </CardContent>
