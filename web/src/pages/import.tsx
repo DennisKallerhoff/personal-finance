@@ -233,7 +233,7 @@ export default function Import() {
         .from('import_jobs')
         .select('id, filename, created_at')
         .eq('file_hash', fileHash)
-        .single()
+        .maybeSingle()
 
       if (existingImport) {
         const importDate = new Date(existingImport.created_at || '').toLocaleDateString('de-DE')
