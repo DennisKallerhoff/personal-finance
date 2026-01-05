@@ -12,8 +12,9 @@ create index if not exists idx_transactions_vendor_date
   where direction = 'debit' and is_transfer = false;
 
 -- Optimize category-based aggregations (monthly_summary, category_trends)
-create index if not exists idx_transactions_category_month
-  on transactions(category_id, date_trunc('month', date));
+create index if not exists idx_transactions_category_date
+  on transactions(category_id, date desc)
+  where is_transfer = false;
 
 -- Optimize import job lookups for Import Management page
 create index if not exists idx_transactions_import_job
@@ -21,6 +22,6 @@ create index if not exists idx_transactions_import_job
 
 -- Down migration (commented for reference)
 -- drop index if exists idx_transactions_import_job;
--- drop index if exists idx_transactions_category_month;
+-- drop index if exists idx_transactions_category_date;
 -- drop index if exists idx_transactions_vendor_date;
 -- drop index if exists idx_transactions_date_direction;
