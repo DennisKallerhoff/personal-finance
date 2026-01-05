@@ -1,39 +1,40 @@
 -- =====================================================
--- SEED DATA FOR HAUSHALTSBUCH
+-- MIGRATION: Restructure Categories
 -- =====================================================
--- This file populates the database with default data
--- Run with: supabase db reset (includes seed)
--- =====================================================
-
--- 1. Default Accounts
--- =====================================================
-insert into accounts (id, name, type, color, is_active)
-values
-  ('a0000001-0001-0001-0001-000000000001', 'ING Girokonto', 'checking', '#FF6200', true),
-  ('a0000001-0001-0001-0001-000000000002', 'DKB Kreditkarte', 'credit_card', '#0077CC', true);
-
--- =====================================================
--- 2. Categories (German, 2-level hierarchy)
--- =====================================================
--- Structure:
+-- This migration replaces the old category structure with a new one:
 --   A. AUSGABEN (Spending) - 8 top-level categories
 --   B. EINNAHMEN (Income) - separate from spending
 --   C. UMBUCHUNGEN (Transfers) - analytically neutral
 --
--- Note: "Subscriptions" is NOT a category - it's a pattern/flag.
---       Streaming goes to Freizeit, Phone contracts to Wohnen, etc.
+-- Key changes:
+-- - "Subscriptions" removed (it's a pattern/flag, not a category)
+-- - "Familie & Kinder" added with kids-specific subcategories
+-- - "Ferienimmobilie Mallorca" added as dedicated category
+-- - "Sparen & Investieren" added
+-- - Streaming services moved to "Freizeit & Lebensstil"
+-- - Phone/Internet moved to "Wohnen"
 -- =====================================================
+
+-- First, clear existing category assignments from transactions
+-- (they'll need to be re-categorized with the new structure)
+UPDATE transactions SET category_id = NULL;
+
+-- Delete existing vendor rules (they reference old category IDs)
+DELETE FROM vendor_rules;
+
+-- Delete existing categories
+DELETE FROM categories;
 
 -- =====================================================
 -- A. AUSGABEN (Spending)
 -- =====================================================
 
 -- 1. Wohnen (Hauptwohnsitz)
-insert into categories (id, name, parent_id, icon, color, sort_order)
-values ('c0000001-0001-0001-0001-000000000001', 'Wohnen', null, '🏠', '#8B4513', 1);
+INSERT INTO categories (id, name, parent_id, icon, color, sort_order)
+VALUES ('c0000001-0001-0001-0001-000000000001', 'Wohnen', null, '🏠', '#8B4513', 1);
 
-insert into categories (id, name, parent_id, icon, color, sort_order)
-values
+INSERT INTO categories (id, name, parent_id, icon, color, sort_order)
+VALUES
   ('c0000002-0001-0001-0001-000000000001', 'Miete / Kredit', 'c0000001-0001-0001-0001-000000000001', '🔑', '#8B4513', 1),
   ('c0000002-0001-0001-0001-000000000002', 'Nebenkosten', 'c0000001-0001-0001-0001-000000000001', '💡', '#8B4513', 2),
   ('c0000002-0001-0001-0001-000000000003', 'Internet & Mobilfunk', 'c0000001-0001-0001-0001-000000000001', '📶', '#8B4513', 3),
@@ -42,11 +43,11 @@ values
   ('c0000002-0001-0001-0001-000000000006', 'Reinigung / Gartenhilfe', 'c0000001-0001-0001-0001-000000000001', '🧹', '#8B4513', 6);
 
 -- 2. Ferienimmobilie – Mallorca
-insert into categories (id, name, parent_id, icon, color, sort_order)
-values ('c0000001-0001-0001-0001-000000000002', 'Ferienimmobilie Mallorca', null, '🏝️', '#E67E22', 2);
+INSERT INTO categories (id, name, parent_id, icon, color, sort_order)
+VALUES ('c0000001-0001-0001-0001-000000000002', 'Ferienimmobilie Mallorca', null, '🏝️', '#E67E22', 2);
 
-insert into categories (id, name, parent_id, icon, color, sort_order)
-values
+INSERT INTO categories (id, name, parent_id, icon, color, sort_order)
+VALUES
   ('c0000002-0001-0001-0001-000000000010', 'Finanzierung / Kredit', 'c0000001-0001-0001-0001-000000000002', '🏦', '#E67E22', 1),
   ('c0000002-0001-0001-0001-000000000011', 'Nebenkosten & Internet', 'c0000001-0001-0001-0001-000000000002', '💡', '#E67E22', 2),
   ('c0000002-0001-0001-0001-000000000012', 'Instandhaltung & Reparaturen', 'c0000001-0001-0001-0001-000000000002', '🔧', '#E67E22', 3),
@@ -56,11 +57,11 @@ values
   ('c0000002-0001-0001-0001-000000000016', 'Einrichtung & Upgrades', 'c0000001-0001-0001-0001-000000000002', '🛋️', '#E67E22', 7);
 
 -- 3. Mobilität
-insert into categories (id, name, parent_id, icon, color, sort_order)
-values ('c0000001-0001-0001-0001-000000000003', 'Mobilität', null, '🚗', '#2196F3', 3);
+INSERT INTO categories (id, name, parent_id, icon, color, sort_order)
+VALUES ('c0000001-0001-0001-0001-000000000003', 'Mobilität', null, '🚗', '#2196F3', 3);
 
-insert into categories (id, name, parent_id, icon, color, sort_order)
-values
+INSERT INTO categories (id, name, parent_id, icon, color, sort_order)
+VALUES
   ('c0000002-0001-0001-0001-000000000020', 'Fahrzeugfinanzierung / Leasing', 'c0000001-0001-0001-0001-000000000003', '🚙', '#2196F3', 1),
   ('c0000002-0001-0001-0001-000000000021', 'Kraftstoff / Laden', 'c0000001-0001-0001-0001-000000000003', '⛽', '#2196F3', 2),
   ('c0000002-0001-0001-0001-000000000022', 'Versicherung & Steuer', 'c0000001-0001-0001-0001-000000000003', '🛡️', '#2196F3', 3),
@@ -68,11 +69,11 @@ values
   ('c0000002-0001-0001-0001-000000000024', 'ÖPNV / Gelegenheitsmobilität', 'c0000001-0001-0001-0001-000000000003', '🚇', '#2196F3', 5);
 
 -- 4. Familie & Kinder
-insert into categories (id, name, parent_id, icon, color, sort_order)
-values ('c0000001-0001-0001-0001-000000000004', 'Familie & Kinder', null, '👨‍👩‍👧‍👦', '#9C27B0', 4);
+INSERT INTO categories (id, name, parent_id, icon, color, sort_order)
+VALUES ('c0000001-0001-0001-0001-000000000004', 'Familie & Kinder', null, '👨‍👩‍👧‍👦', '#9C27B0', 4);
 
-insert into categories (id, name, parent_id, icon, color, sort_order)
-values
+INSERT INTO categories (id, name, parent_id, icon, color, sort_order)
+VALUES
   ('c0000002-0001-0001-0001-000000000030', 'Kita / Kindergarten', 'c0000001-0001-0001-0001-000000000004', '🎒', '#9C27B0', 1),
   ('c0000002-0001-0001-0001-000000000031', 'Kleidung & Schuhe', 'c0000001-0001-0001-0001-000000000004', '👟', '#9C27B0', 2),
   ('c0000002-0001-0001-0001-000000000032', 'Spielzeug & Bücher', 'c0000001-0001-0001-0001-000000000004', '🧸', '#9C27B0', 3),
@@ -81,32 +82,32 @@ values
   ('c0000002-0001-0001-0001-000000000035', 'Babysitting & Betreuung', 'c0000001-0001-0001-0001-000000000004', '👶', '#9C27B0', 6);
 
 -- 5. Alltag & Haushalt
-insert into categories (id, name, parent_id, icon, color, sort_order)
-values ('c0000001-0001-0001-0001-000000000005', 'Alltag & Haushalt', null, '🛒', '#4CAF50', 5);
+INSERT INTO categories (id, name, parent_id, icon, color, sort_order)
+VALUES ('c0000001-0001-0001-0001-000000000005', 'Alltag & Haushalt', null, '🛒', '#4CAF50', 5);
 
-insert into categories (id, name, parent_id, icon, color, sort_order)
-values
+INSERT INTO categories (id, name, parent_id, icon, color, sort_order)
+VALUES
   ('c0000002-0001-0001-0001-000000000040', 'Lebensmittel', 'c0000001-0001-0001-0001-000000000005', '🥦', '#4CAF50', 1),
   ('c0000002-0001-0001-0001-000000000041', 'Haushaltsbedarf', 'c0000001-0001-0001-0001-000000000005', '🧴', '#4CAF50', 2),
   ('c0000002-0001-0001-0001-000000000042', 'Drogerie & Pflege', 'c0000001-0001-0001-0001-000000000005', '🪥', '#4CAF50', 3),
   ('c0000002-0001-0001-0001-000000000043', 'Kleine Alltagsausgaben', 'c0000001-0001-0001-0001-000000000005', '🧾', '#4CAF50', 4);
 
 -- 6. Gesundheit & Versicherungen
-insert into categories (id, name, parent_id, icon, color, sort_order)
-values ('c0000001-0001-0001-0001-000000000006', 'Gesundheit & Versicherungen', null, '🏥', '#F44336', 6);
+INSERT INTO categories (id, name, parent_id, icon, color, sort_order)
+VALUES ('c0000001-0001-0001-0001-000000000006', 'Gesundheit & Versicherungen', null, '🏥', '#F44336', 6);
 
-insert into categories (id, name, parent_id, icon, color, sort_order)
-values
+INSERT INTO categories (id, name, parent_id, icon, color, sort_order)
+VALUES
   ('c0000002-0001-0001-0001-000000000050', 'Krankenversicherung', 'c0000001-0001-0001-0001-000000000006', '💳', '#F44336', 1),
   ('c0000002-0001-0001-0001-000000000051', 'Arzt, Zahnarzt, Medikamente', 'c0000001-0001-0001-0001-000000000006', '💊', '#F44336', 2),
   ('c0000002-0001-0001-0001-000000000052', 'Sonstige Versicherungen', 'c0000001-0001-0001-0001-000000000006', '🛡️', '#F44336', 3);
 
 -- 7. Freizeit & Lebensstil
-insert into categories (id, name, parent_id, icon, color, sort_order)
-values ('c0000001-0001-0001-0001-000000000007', 'Freizeit & Lebensstil', null, '🎉', '#FF9800', 7);
+INSERT INTO categories (id, name, parent_id, icon, color, sort_order)
+VALUES ('c0000001-0001-0001-0001-000000000007', 'Freizeit & Lebensstil', null, '🎉', '#FF9800', 7);
 
-insert into categories (id, name, parent_id, icon, color, sort_order)
-values
+INSERT INTO categories (id, name, parent_id, icon, color, sort_order)
+VALUES
   ('c0000002-0001-0001-0001-000000000060', 'Essen gehen & Take-away', 'c0000001-0001-0001-0001-000000000007', '🍽️', '#FF9800', 1),
   ('c0000002-0001-0001-0001-000000000061', 'Sport & Training (Erwachsene)', 'c0000001-0001-0001-0001-000000000007', '🏋️', '#FF9800', 2),
   ('c0000002-0001-0001-0001-000000000062', 'Streaming & Medien', 'c0000001-0001-0001-0001-000000000007', '📺', '#FF9800', 3),
@@ -115,25 +116,25 @@ values
   ('c0000002-0001-0001-0001-000000000065', 'Reisen (nicht Mallorca)', 'c0000001-0001-0001-0001-000000000007', '🧳', '#FF9800', 6);
 
 -- 8. Sparen & Investieren
-insert into categories (id, name, parent_id, icon, color, sort_order)
-values ('c0000001-0001-0001-0001-000000000008', 'Sparen & Investieren', null, '📈', '#00BCD4', 8);
+INSERT INTO categories (id, name, parent_id, icon, color, sort_order)
+VALUES ('c0000001-0001-0001-0001-000000000008', 'Sparen & Investieren', null, '📈', '#00BCD4', 8);
 
-insert into categories (id, name, parent_id, icon, color, sort_order)
-values
+INSERT INTO categories (id, name, parent_id, icon, color, sort_order)
+VALUES
   ('c0000002-0001-0001-0001-000000000070', 'Notgroschen', 'c0000001-0001-0001-0001-000000000008', '🏦', '#00BCD4', 1),
   ('c0000002-0001-0001-0001-000000000071', 'Langfristige Investments', 'c0000001-0001-0001-0001-000000000008', '📊', '#00BCD4', 2),
   ('c0000002-0001-0001-0001-000000000072', 'Altersvorsorge', 'c0000001-0001-0001-0001-000000000008', '🧓', '#00BCD4', 3),
   ('c0000002-0001-0001-0001-000000000073', 'Rücklagen für Kinder', 'c0000001-0001-0001-0001-000000000008', '👧', '#00BCD4', 4);
 
 -- =====================================================
--- B. EINNAHMEN (Income) - separate from spending analysis
+-- B. EINNAHMEN (Income)
 -- =====================================================
 
-insert into categories (id, name, parent_id, icon, color, sort_order)
-values ('c0000001-0001-0001-0001-000000000020', 'Einnahmen', null, '💰', '#4CAF50', 20);
+INSERT INTO categories (id, name, parent_id, icon, color, sort_order)
+VALUES ('c0000001-0001-0001-0001-000000000020', 'Einnahmen', null, '💰', '#4CAF50', 20);
 
-insert into categories (id, name, parent_id, icon, color, sort_order)
-values
+INSERT INTO categories (id, name, parent_id, icon, color, sort_order)
+VALUES
   ('c0000002-0001-0001-0001-000000000080', 'Gehalt', 'c0000001-0001-0001-0001-000000000020', '💵', '#4CAF50', 1),
   ('c0000002-0001-0001-0001-000000000081', 'Bonus / Variable Vergütung', 'c0000001-0001-0001-0001-000000000020', '🎯', '#4CAF50', 2),
   ('c0000002-0001-0001-0001-000000000082', 'Selbstständige Einnahmen', 'c0000001-0001-0001-0001-000000000020', '💼', '#4CAF50', 3),
@@ -142,15 +143,14 @@ values
   ('c0000002-0001-0001-0001-000000000085', 'Sonstige Einnahmen', 'c0000001-0001-0001-0001-000000000020', '💸', '#4CAF50', 6);
 
 -- =====================================================
--- C. UMBUCHUNGEN (Transfers) - analytically neutral
+-- C. UMBUCHUNGEN (Transfers)
 -- =====================================================
--- Rule: Transfers must NEVER appear in spend reports
 
-insert into categories (id, name, parent_id, icon, color, sort_order)
-values ('c0000001-0001-0001-0001-000000000030', 'Umbuchungen', null, '🔄', '#9E9E9E', 30);
+INSERT INTO categories (id, name, parent_id, icon, color, sort_order)
+VALUES ('c0000001-0001-0001-0001-000000000030', 'Umbuchungen', null, '🔄', '#9E9E9E', 30);
 
-insert into categories (id, name, parent_id, icon, color, sort_order)
-values
+INSERT INTO categories (id, name, parent_id, icon, color, sort_order)
+VALUES
   ('c0000002-0001-0001-0001-000000000090', 'Konto → Konto', 'c0000001-0001-0001-0001-000000000030', '↔️', '#9E9E9E', 1),
   ('c0000002-0001-0001-0001-000000000091', 'Giro → Tagesgeld', 'c0000001-0001-0001-0001-000000000030', '🏦', '#9E9E9E', 2),
   ('c0000002-0001-0001-0001-000000000092', 'Giro → Depot', 'c0000001-0001-0001-0001-000000000030', '📊', '#9E9E9E', 3),
@@ -158,13 +158,12 @@ values
   ('c0000002-0001-0001-0001-000000000094', 'Cash-Abhebungen', 'c0000001-0001-0001-0001-000000000030', '🏧', '#9E9E9E', 5);
 
 -- =====================================================
--- 3. Default Vendor Rules (common German merchants)
+-- Vendor Rules (updated to new category IDs)
 -- =====================================================
--- Note: Category IDs updated to match new structure
 
-insert into vendor_rules (match_pattern, normalized_vendor, category_id, match_type, priority)
-values
-  -- Lebensmittel (Alltag & Haushalt > Lebensmittel)
+INSERT INTO vendor_rules (match_pattern, normalized_vendor, category_id, match_type, priority)
+VALUES
+  -- Lebensmittel
   ('EDEKA', 'Edeka', 'c0000002-0001-0001-0001-000000000040', 'contains', 10),
   ('REWE', 'Rewe', 'c0000002-0001-0001-0001-000000000040', 'contains', 10),
   ('ALDI', 'Aldi', 'c0000002-0001-0001-0001-000000000040', 'contains', 10),
@@ -178,7 +177,7 @@ values
   ('DM-DROGERIE', 'dm', 'c0000002-0001-0001-0001-000000000042', 'contains', 10),
   ('DM DROGERIE', 'dm', 'c0000002-0001-0001-0001-000000000042', 'contains', 10),
 
-  -- Essen gehen & Take-away (Freizeit > Essen gehen)
+  -- Essen gehen & Take-away
   ('LIEFERANDO', 'Lieferando', 'c0000002-0001-0001-0001-000000000060', 'contains', 10),
   ('DELIVEROO', 'Deliveroo', 'c0000002-0001-0001-0001-000000000060', 'contains', 10),
   ('UBER EATS', 'Uber Eats', 'c0000002-0001-0001-0001-000000000060', 'contains', 10),
@@ -198,18 +197,18 @@ values
   ('ESSO', 'Esso', 'c0000002-0001-0001-0001-000000000021', 'contains', 10),
   ('JET TANKSTELLE', 'Jet', 'c0000002-0001-0001-0001-000000000021', 'contains', 10),
 
-  -- Mobilität > ÖPNV/Gelegenheit (Taxi/Uber)
+  -- Taxi/Ride-sharing
   ('UBER', 'Uber', 'c0000002-0001-0001-0001-000000000024', 'exact', 10),
   ('FREE NOW', 'FreeNow', 'c0000002-0001-0001-0001-000000000024', 'contains', 10),
   ('BOLT', 'Bolt', 'c0000002-0001-0001-0001-000000000024', 'contains', 10),
 
-  -- Flüge → Freizeit > Reisen (nicht Mallorca) by default
+  -- Flüge → Reisen
   ('EUROWINGS', 'Eurowings', 'c0000002-0001-0001-0001-000000000065', 'contains', 10),
   ('LUFTHANSA', 'Lufthansa', 'c0000002-0001-0001-0001-000000000065', 'contains', 10),
   ('RYANAIR', 'Ryanair', 'c0000002-0001-0001-0001-000000000065', 'contains', 10),
   ('EASYJET', 'easyJet', 'c0000002-0001-0001-0001-000000000065', 'contains', 10),
 
-  -- Streaming & Medien (Freizeit > Streaming)
+  -- Streaming & Medien
   ('NETFLIX', 'Netflix', 'c0000002-0001-0001-0001-000000000062', 'contains', 10),
   ('SPOTIFY', 'Spotify', 'c0000002-0001-0001-0001-000000000062', 'contains', 10),
   ('AMAZON PRIME', 'Amazon Prime', 'c0000002-0001-0001-0001-000000000062', 'contains', 10),
@@ -217,28 +216,27 @@ values
   ('APPLE MUSIC', 'Apple Music', 'c0000002-0001-0001-0001-000000000062', 'contains', 10),
   ('YOUTUBE PREMIUM', 'YouTube Premium', 'c0000002-0001-0001-0001-000000000062', 'contains', 10),
 
-  -- Internet & Mobilfunk (Wohnen)
+  -- Internet & Mobilfunk
   ('TELEKOM', 'Telekom', 'c0000002-0001-0001-0001-000000000003', 'contains', 10),
   ('VODAFONE', 'Vodafone', 'c0000002-0001-0001-0001-000000000003', 'contains', 10),
   ('O2', 'O2', 'c0000002-0001-0001-0001-000000000003', 'contains', 10),
   ('1&1', '1&1', 'c0000002-0001-0001-0001-000000000003', 'contains', 10),
 
-  -- Kleidung → Familie > Kleidung & Schuhe (default to family)
+  -- Kleidung → Familie
   ('ZALANDO', 'Zalando', 'c0000002-0001-0001-0001-000000000031', 'contains', 10),
   ('H&M', 'H&M', 'c0000002-0001-0001-0001-000000000031', 'contains', 10),
   ('ZARA', 'Zara', 'c0000002-0001-0001-0001-000000000031', 'contains', 10),
   ('C&A', 'C&A', 'c0000002-0001-0001-0001-000000000031', 'contains', 10),
 
-  -- Sport & Training (Erwachsene)
+  -- Sport & Training
   ('FITX', 'FitX', 'c0000002-0001-0001-0001-000000000061', 'contains', 10),
   ('MCFIT', 'McFit', 'c0000002-0001-0001-0001-000000000061', 'contains', 10),
   ('URBAN SPORTS', 'Urban Sports Club', 'c0000002-0001-0001-0001-000000000061', 'contains', 10),
 
-  -- Generic / Low priority (needs review)
+  -- Generic (needs review)
   ('AMAZON', 'Amazon', 'c0000002-0001-0001-0001-000000000043', 'contains', 50),
   ('AMZN', 'Amazon', 'c0000002-0001-0001-0001-000000000043', 'contains', 50),
   ('PAYPAL', 'PayPal', 'c0000002-0001-0001-0001-000000000043', 'contains', 100);
 
--- =====================================================
--- END SEED DATA
--- =====================================================
+-- Notify PostgREST to refresh schema cache
+NOTIFY pgrst, 'reload schema';
