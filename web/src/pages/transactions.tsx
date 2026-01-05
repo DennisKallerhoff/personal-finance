@@ -174,10 +174,7 @@ export default function Transactions() {
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedCategory, setSelectedCategory] = useState<string>('')
   const [selectedAccount, setSelectedAccount] = useState<string>('')
-  const [selectedMonth, setSelectedMonth] = useState<string>(() => {
-    const now = new Date()
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
-  })
+  const [selectedDateRange, setSelectedDateRange] = useState<string>('last30')
   const [updateError, setUpdateError] = useState<string | null>(null)
   const [currentPage, setCurrentPage] = useState(1)
   const [totalCount, setTotalCount] = useState(0)
@@ -196,27 +193,55 @@ export default function Transactions() {
     fetchMetadata()
   }, [])
 
+  // Generate year options (current year back to 2020)
+  const currentYear = new Date().getFullYear()
+  const yearOptions = Array.from({ length: currentYear - 2019 }, (_, i) => currentYear - i)
+
+  // Calculate date range from selection
+  const getDateRange = (range: string): { startDate: string; endDate: string } => {
+    const today = new Date()
+    const endDate = today.toISOString().split('T')[0]
+
+    if (range.startsWith('last')) {
+      const days = parseInt(range.replace('last', ''))
+      const start = new Date(today)
+      start.setDate(start.getDate() - days)
+      return { startDate: start.toISOString().split('T')[0], endDate }
+    }
+
+    // Year selection (e.g., "2024")
+    const year = parseInt(range)
+    if (!isNaN(year)) {
+      return {
+        startDate: `${year}-01-01`,
+        endDate: `${year}-12-31`
+      }
+    }
+
+    // Fallback to last 30 days
+    const start = new Date(today)
+    start.setDate(start.getDate() - 30)
+    return { startDate: start.toISOString().split('T')[0], endDate }
+  }
+
   // Reset page when filters change
   useEffect(() => {
     setCurrentPage(1)
-  }, [selectedMonth, selectedCategory, selectedAccount])
+  }, [selectedDateRange, selectedCategory, selectedAccount])
 
   // Fetch transactions when filters or page change
   useEffect(() => {
     const fetchTransactions = async () => {
       setLoading(true)
 
-      // Parse selected month
-      const [year, month] = selectedMonth.split('-').map(Number)
-      const startDate = new Date(year, month - 1, 1)
-      const endDate = new Date(year, month, 0) // Last day of month
+      const { startDate, endDate } = getDateRange(selectedDateRange)
 
       // Build base query for count
       let countQuery = supabase
         .from('transactions')
         .select('*', { count: 'exact', head: true })
-        .gte('date', startDate.toISOString().split('T')[0])
-        .lte('date', endDate.toISOString().split('T')[0])
+        .gte('date', startDate)
+        .lte('date', endDate)
 
       if (selectedCategory) {
         countQuery = countQuery.eq('category_id', selectedCategory)
@@ -235,8 +260,8 @@ export default function Transactions() {
       let query = supabase
         .from('transactions')
         .select('*, categories(name, color), accounts(name)')
-        .gte('date', startDate.toISOString().split('T')[0])
-        .lte('date', endDate.toISOString().split('T')[0])
+        .gte('date', startDate)
+        .lte('date', endDate)
         .order('date', { ascending: false })
         .range(from, to)
 
@@ -260,7 +285,7 @@ export default function Transactions() {
     }
 
     fetchTransactions()
-  }, [selectedMonth, selectedCategory, selectedAccount, currentPage])
+  }, [selectedDateRange, selectedCategory, selectedAccount, currentPage])
 
   // Handle category change
   const handleCategoryChange = async (transactionId: string, categoryId: string) => {
@@ -341,12 +366,23 @@ export default function Transactions() {
               <option key={acc.id} value={acc.id}>{acc.name}</option>
             ))}
           </select>
-          <input
-            type="month"
-            value={selectedMonth}
-            onChange={(e) => setSelectedMonth(e.target.value)}
-            className="px-3 py-2 border-2 border-border rounded-lg bg-[#fafafa] focus:border-primary focus:bg-white outline-none"
-          />
+          <select
+            value={selectedDateRange}
+            onChange={(e) => setSelectedDateRange(e.target.value)}
+            className="px-3 py-2 border-2 border-border rounded-lg bg-[#fafafa] focus:border-primary focus:bg-white outline-none w-44"
+          >
+            <optgroup label="Recent">
+              <option value="last30">Last 30 days</option>
+              <option value="last90">Last 90 days</option>
+              <option value="last180">Last 180 days</option>
+              <option value="last365">Last 12 months</option>
+            </optgroup>
+            <optgroup label="By Year">
+              {yearOptions.map((year) => (
+                <option key={year} value={year.toString()}>{year}</option>
+              ))}
+            </optgroup>
+          </select>
         </div>
 
         {/* Error Message */}
