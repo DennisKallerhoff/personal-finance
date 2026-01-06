@@ -4,6 +4,7 @@ import { extractText } from "npm:unpdf";
 
 import { parseING } from "../shared/pdf/ing-parser.ts";
 import { parseDKB } from "../shared/pdf/dkb-parser.ts";
+import { parseINGCsv } from "../shared/csv/ing-csv-parser.ts";
 import { BadInputError, UpstreamFailError } from "../shared/errors.ts";
 import type { ParseResult } from "../shared/pdf/types.ts";
 import { normalizeVendor } from "../shared/vendor-normalization.ts";
@@ -93,11 +94,16 @@ serve(async (req: Request) => {
       throw new BadInputError('Could not detect bank type. Please specify bank=ing or bank=dkb');
     }
 
-    // Parse based on bank type
+    // Parse based on bank type and file format
     let parseResult: ParseResult;
 
     if (detectedBank === 'ing') {
-      parseResult = parseING(text);
+      // Use CSV parser for CSV files, PDF parser otherwise
+      if (isCSV) {
+        parseResult = parseINGCsv(text);
+      } else {
+        parseResult = parseING(text);
+      }
     } else if (detectedBank === 'dkb') {
       parseResult = parseDKB(text);
     } else {
@@ -145,7 +151,9 @@ serve(async (req: Request) => {
 function detectBankType(text: string, filename: string): 'ing' | 'dkb' | null {
   // Check filename first
   const lowerFilename = filename.toLowerCase();
-  if (lowerFilename.includes('girokonto') || lowerFilename.includes('ing')) {
+  if (lowerFilename.includes('girokonto') ||
+      lowerFilename.includes('ing') ||
+      lowerFilename.includes('umsatzanzeige')) {
     return 'ing';
   }
   if (lowerFilename.includes('kreditkarte') ||
@@ -156,7 +164,9 @@ function detectBankType(text: string, filename: string): 'ing' | 'dkb' | null {
   }
 
   // Check content
-  if (text.includes('ING-DiBa') || text.includes('Girokonto Nummer')) {
+  if (text.includes('ING-DiBa') ||
+      text.includes('Girokonto Nummer') ||
+      text.includes('Kontoname;Girokonto')) {
     return 'ing';
   }
   if (text.includes('Miles & More') || text.includes('Kreditkartenabrechnungen')) {
