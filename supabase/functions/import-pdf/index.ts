@@ -4,7 +4,6 @@ import { extractText } from "npm:unpdf";
 
 import { parseING } from "../shared/pdf/ing-parser.ts";
 import { parseDKB } from "../shared/pdf/dkb-parser.ts";
-import { parseINGCsv } from "../shared/csv/ing-csv-parser.ts";
 import { BadInputError, UpstreamFailError } from "../shared/errors.ts";
 import type { ParseResult } from "../shared/pdf/types.ts";
 import { normalizeVendor } from "../shared/vendor-normalization.ts";
@@ -94,16 +93,11 @@ serve(async (req: Request) => {
       throw new BadInputError('Could not detect bank type. Please specify bank=ing or bank=dkb');
     }
 
-    // Parse based on bank type and file format
+    // Parse based on bank type (format auto-detection is handled by each parser)
     let parseResult: ParseResult;
 
     if (detectedBank === 'ing') {
-      // Use CSV parser for CSV files, PDF parser otherwise
-      if (isCSV) {
-        parseResult = parseINGCsv(text);
-      } else {
-        parseResult = parseING(text);
-      }
+      parseResult = parseING(text);
     } else if (detectedBank === 'dkb') {
       parseResult = parseDKB(text);
     } else {
