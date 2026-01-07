@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { supabase, type Account, type Category, type VendorRule } from '@/lib/supabase'
 
 interface VendorRuleWithCategory extends VendorRule {
@@ -38,6 +39,14 @@ export default function Settings() {
   const [editingAccount, setEditingAccount] = useState<Account | null>(null)
   const [editingCategory, setEditingCategory] = useState<Category | null>(null)
   const [editFormData, setEditFormData] = useState<{ name: string; color?: string; icon?: string }>({ name: '' })
+
+  // Create category dialog state
+  const [isCreatingCategory, setIsCreatingCategory] = useState(false)
+  const [newCategoryData, setNewCategoryData] = useState<{ name: string; icon: string; parentId: string | null }>({
+    name: '',
+    icon: '',
+    parentId: null
+  })
 
   useEffect(() => {
     const fetchData = async () => {
@@ -121,6 +130,87 @@ export default function Settings() {
       ))
       setEditingCategory(null)
       setEditFormData({ name: '' })
+    }
+  }
+
+  const handleDeleteVendorRule = async (ruleId: string) => {
+    if (!confirm('Are you sure you want to delete this vendor rule?')) {
+      return
+    }
+
+    const { error } = await supabase
+      .from('vendor_rules')
+      .delete()
+      .eq('id', ruleId)
+
+    if (!error) {
+      setVendorRules(vendorRules.filter(r => r.id !== ruleId))
+    }
+  }
+
+  const handleDeleteCategory = async (categoryId: string) => {
+    // Check if category has children
+    const hasChildren = categories.some(c => c.parent_id === categoryId)
+    if (hasChildren) {
+      alert('Cannot delete category with subcategories. Please delete subcategories first.')
+      return
+    }
+
+    // Check if category is used by transactions
+    const { count } = await supabase
+      .from('transactions')
+      .select('*', { count: 'exact', head: true })
+      .eq('category_id', categoryId)
+
+    if (count && count > 0) {
+      if (!confirm(`This category is used by ${count} transaction(s). Deleting it will remove the category from those transactions. Continue?`)) {
+        return
+      }
+    } else {
+      if (!confirm('Are you sure you want to delete this category?')) {
+        return
+      }
+    }
+
+    const { error } = await supabase
+      .from('categories')
+      .delete()
+      .eq('id', categoryId)
+
+    if (!error) {
+      setCategories(categories.filter(c => c.id !== categoryId))
+    }
+  }
+
+  const handleCreateCategory = () => {
+    setNewCategoryData({ name: '', icon: '', parentId: null })
+    setIsCreatingCategory(true)
+  }
+
+  const handleSaveNewCategory = async () => {
+    if (!newCategoryData.name.trim()) {
+      alert('Category name is required')
+      return
+    }
+
+    // Get max sort_order for new category
+    const maxSortOrder = Math.max(0, ...categories.map(c => c.sort_order || 0))
+
+    const { data, error } = await supabase
+      .from('categories')
+      .insert({
+        name: newCategoryData.name,
+        icon: newCategoryData.icon || null,
+        parent_id: newCategoryData.parentId || null,
+        sort_order: maxSortOrder + 1
+      })
+      .select()
+      .single()
+
+    if (!error && data) {
+      setCategories([...categories, data])
+      setIsCreatingCategory(false)
+      setNewCategoryData({ name: '', icon: '', parentId: null })
     }
   }
 
@@ -227,7 +317,7 @@ export default function Settings() {
               <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground m-0">
                 Categories
               </h3>
-              <Button size="sm">+ New</Button>
+              <Button size="sm" onClick={handleCreateCategory}>+ New</Button>
             </div>
             <div className="max-h-[400px] overflow-y-auto pr-2">
               <table className="w-full text-[15px]">
@@ -243,9 +333,19 @@ export default function Settings() {
                           </div>
                         </td>
                         <td className="py-3 border-b border-border text-right">
-                          <Button variant="outline" size="sm" onClick={() => handleEditCategory(parent)}>
-                            Edit
-                          </Button>
+                          <div className="flex items-center justify-end gap-2">
+                            <Button variant="outline" size="sm" onClick={() => handleEditCategory(parent)}>
+                              Edit
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleDeleteCategory(parent.id)}
+                              className="text-destructive hover:text-destructive hover:bg-[var(--destructive-light)]"
+                            >
+                              Delete
+                            </Button>
+                          </div>
                         </td>
                       </tr>
                       {/* Child categories */}
@@ -258,9 +358,19 @@ export default function Settings() {
                             </div>
                           </td>
                           <td className="py-2 border-b border-border text-right">
-                            <Button variant="ghost" size="sm" onClick={() => handleEditCategory(child)}>
-                              Edit
-                            </Button>
+                            <div className="flex items-center justify-end gap-2">
+                              <Button variant="ghost" size="sm" onClick={() => handleEditCategory(child)}>
+                                Edit
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleDeleteCategory(child.id)}
+                                className="text-destructive hover:text-destructive hover:bg-[var(--destructive-light)]"
+                              >
+                                Delete
+                              </Button>
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -306,12 +416,15 @@ export default function Settings() {
                     <th className="text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground pb-3 border-b-2 border-border">
                       Category
                     </th>
+                    <th className="text-right text-xs font-semibold uppercase tracking-wider text-muted-foreground pb-3 border-b-2 border-border">
+                      Action
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredVendorRules.length === 0 ? (
                     <tr>
-                      <td colSpan={3} className="py-6 text-center text-muted-foreground">
+                      <td colSpan={4} className="py-6 text-center text-muted-foreground">
                         {vendorRuleSearch ? 'No matching rules found.' : 'No vendor rules defined yet.'}
                       </td>
                     </tr>
@@ -331,6 +444,16 @@ export default function Settings() {
                         </td>
                         <td className="py-3 border-b border-border text-muted-foreground italic">
                           {rule.categories?.name || '(Keep)'}
+                        </td>
+                        <td className="py-3 border-b border-border text-right">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDeleteVendorRule(rule.id)}
+                            className="text-destructive hover:text-destructive hover:bg-[var(--destructive-light)]"
+                          >
+                            Delete
+                          </Button>
                         </td>
                       </tr>
                     ))
@@ -412,6 +535,63 @@ export default function Settings() {
             </Button>
             <Button onClick={handleSaveCategory}>
               Save Changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Create Category Dialog */}
+      <Dialog open={isCreatingCategory} onOpenChange={(open) => !open && setIsCreatingCategory(false)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Create Category</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div>
+              <Label htmlFor="new-category-name">Category Name</Label>
+              <Input
+                id="new-category-name"
+                value={newCategoryData.name}
+                onChange={(e) => setNewCategoryData({ ...newCategoryData, name: e.target.value })}
+                placeholder="e.g. Transportation"
+              />
+            </div>
+            <div>
+              <Label htmlFor="new-category-icon">Icon (emoji)</Label>
+              <Input
+                id="new-category-icon"
+                value={newCategoryData.icon}
+                onChange={(e) => setNewCategoryData({ ...newCategoryData, icon: e.target.value })}
+                placeholder="🚗"
+                maxLength={2}
+              />
+            </div>
+            <div>
+              <Label htmlFor="new-category-parent">Parent Category (optional)</Label>
+              <Select
+                value={newCategoryData.parentId || 'none'}
+                onValueChange={(value) => setNewCategoryData({ ...newCategoryData, parentId: value === 'none' ? null : value })}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="None (top-level category)" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">None (top-level category)</SelectItem>
+                  {parentCategories.map((cat) => (
+                    <SelectItem key={cat.id} value={cat.id}>
+                      {cat.icon} {cat.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsCreatingCategory(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleSaveNewCategory}>
+              Create Category
             </Button>
           </DialogFooter>
         </DialogContent>

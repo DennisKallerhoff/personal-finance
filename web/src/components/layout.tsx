@@ -1,6 +1,5 @@
 import { Link, Outlet, useLocation } from 'react-router'
 import { useAuth } from '@/hooks/use-auth'
-import { ChevronDown } from 'lucide-react'
 
 function DollarIcon() {
   return (
@@ -25,7 +24,6 @@ export function Layout() {
   const location = useLocation()
 
   const navItems = [
-    { path: '/', label: 'Home' },
     { path: '/transactions', label: 'Transactions' },
     { path: '/import', label: 'Import' },
     { path: '/settings', label: 'Settings' },
@@ -36,55 +34,48 @@ export function Layout() {
     ? user.email.substring(0, 2).toUpperCase()
     : 'U'
 
-  const userName = user?.email
-    ? user.email.split('@')[0].charAt(0).toUpperCase() + user.email.split('@')[0].slice(1)
-    : 'User'
-
   return (
     <div className="min-h-screen flex flex-col">
       {/* Dark Header */}
       <header className="bg-secondary text-white sticky top-0 z-50 shadow-md">
         <div className="max-w-[1400px] mx-auto px-6 py-4 flex items-center justify-between">
-          {/* Logo */}
-          <div className="flex items-center gap-3">
+          {/* Logo - Clickable */}
+          <Link to="/" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
             <DollarIcon />
             <span className="font-heading font-bold text-2xl tracking-tight text-white">
               Haushaltsbuch
             </span>
-          </div>
+          </Link>
 
-          {/* Navigation */}
-          <nav>
-            <ul className="flex gap-8">
-              {navItems.map((item) => (
-                <li key={item.path}>
-                  <Link
-                    to={item.path}
-                    className={`text-[15px] font-medium py-2 transition-all border-b-2 ${
-                      location.pathname === item.path
-                        ? 'text-primary border-primary'
-                        : 'text-[#a3a3a3] border-transparent hover:text-primary hover:border-primary'
-                    }`}
-                  >
-                    {item.label}
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          </nav>
+          {/* Navigation - Right Aligned */}
+          <div className="flex items-center gap-8">
+            <nav>
+              <ul className="flex gap-8">
+                {navItems.map((item) => (
+                  <li key={item.path}>
+                    <Link
+                      to={item.path}
+                      className={`text-[15px] font-medium py-2 transition-all border-b-2 ${
+                        location.pathname === item.path
+                          ? 'text-primary border-primary'
+                          : 'text-[#a3a3a3] border-transparent hover:text-primary hover:border-primary'
+                      }`}
+                    >
+                      {item.label}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </nav>
 
-          {/* User Menu */}
-          <div className="flex items-center gap-4 pl-8 border-l border-white/10">
+            {/* User Avatar - Clickable */}
             <button
               onClick={signOut}
-              className="flex items-center gap-2 text-[#a3a3a3] text-sm font-semibold hover:text-white transition-colors"
+              className="w-9 h-9 rounded-full bg-primary text-white flex items-center justify-center font-bold text-sm border-2 border-white/20 hover:border-white/40 hover:scale-105 transition-all cursor-pointer"
+              title="Sign Out"
             >
-              {userName}
-              <ChevronDown size={16} />
-            </button>
-            <div className="w-9 h-9 rounded-full bg-primary text-white flex items-center justify-center font-bold text-sm border-2 border-white/20">
               {userInitials}
-            </div>
+            </button>
           </div>
         </div>
       </header>

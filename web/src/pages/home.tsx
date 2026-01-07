@@ -1,25 +1,22 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router'
-import { Upload, AlertTriangle, Bell, TrendingUp, X } from 'lucide-react'
+import { Upload, TrendingUp, TrendingDown, AlertCircle, Bell } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
 import { supabase } from '@/lib/supabase'
 import {
   formatAmount,
-  getCurrentMonth,
-  getMonthOptions,
   formatMonthLong,
   formatMonth,
   calculatePercentChange,
   formatCompactAmount
 } from '@/lib/format'
-import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, LineChart, Line, Legend } from 'recharts'
+import { ResponsiveContainer, XAxis, YAxis, Tooltip, LineChart, Line, Legend } from 'recharts'
 
-// Types for analytics data
-interface MonthStats {
+// Types
+interface DashboardStats {
   expenses: number
   income: number
   net: number
@@ -27,18 +24,17 @@ interface MonthStats {
   incomeTrend: number
 }
 
-interface TopCategory {
-  category_name: string
-  category_color: string
+interface TopItem {
+  name: string
   expenses_cents: number
-  prev_month_expenses: number
+  prev_period_expenses: number
+  color?: string
 }
 
 interface TrendData {
   month: string
   expenses: number
   income: number
-  rolling_avg_3m: number | null
 }
 
 interface Signal {
@@ -49,34 +45,7 @@ interface Signal {
   id: string
 }
 
-// Response types from Postgres RPC functions
-interface TrendSignalResponse {
-  signal_type: 'TREND_UP' | 'TREND_DOWN'
-  severity: 'info' | 'warning' | 'alert'
-  category_name: string
-  change_pct: number
-  month: string
-}
-
-interface SubscriptionSignalResponse {
-  normalized_vendor: string
-  frequency: string
-  typical_amount: number
-  confidence: 'high' | 'medium' | 'low'
-}
-
-interface LargeTransactionSignalResponse {
-  transaction_id: string
-  vendor: string
-  amount: number
-  date: string
-}
-
-interface NewMerchantSignalResponse {
-  vendor: string
-  first_occurrence: string
-  amount: number
-}
+type DateRange = 'last60' | 'last90' | 'last180' | 'last365' | 'year2024' | 'year2025' | 'year2026' | 'custom'
 
 function MetricCard({ label, value, trend, valueColor }: {
   label: string
@@ -87,15 +56,15 @@ function MetricCard({ label, value, trend, valueColor }: {
   return (
     <Card className="relative overflow-hidden hover:shadow-md transition-all duration-200">
       <div className="absolute top-0 left-0 w-1 h-full bg-primary opacity-50" />
-      <CardContent className="p-8">
+      <CardContent className="p-6">
         <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
           {label}
         </span>
-        <span className={`block font-heading text-4xl font-bold mt-2 mb-3 ${valueColor || 'text-secondary'}`}>
+        <span className={`block font-heading text-3xl font-bold mt-2 mb-2 ${valueColor || 'text-secondary'}`}>
           {value}
         </span>
         {trend !== undefined && (
-          <span className={`inline-flex items-center gap-1 text-sm font-bold px-3 py-1 rounded ${
+          <span className={`inline-flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded ${
             trend > 0
               ? 'bg-[var(--destructive-light)] text-[#991b1b]'
               : trend < 0
@@ -110,232 +79,423 @@ function MetricCard({ label, value, trend, valueColor }: {
   )
 }
 
+function SignalCard({ signal, onDismiss }: { signal: Signal; onDismiss: () => void }) {
+  const icons = {
+    TREND_UP: TrendingUp,
+    TREND_DOWN: TrendingDown,
+    SUBSCRIPTION: Bell,
+    LARGE_TRANSACTION: AlertCircle,
+    NEW_MERCHANT: AlertCircle
+  }
+  const Icon = icons[signal.type]
+
+  return (
+    <Card className={`hover:shadow-md transition-all duration-200 border-l-4 ${
+      signal.severity === 'alert' ? 'border-l-[#ef4444]' :
+      signal.severity === 'warning' ? 'border-l-[#f59e0b]' :
+      'border-l-[#3b82f6]'
+    }`}>
+      <CardContent className="p-4">
+        <div className="flex items-start gap-3">
+          <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${
+            signal.severity === 'alert' ? 'bg-[#fee2e2] text-[#ef4444]' :
+            signal.severity === 'warning' ? 'bg-[#fef3c7] text-[#f59e0b]' :
+            'bg-[#dbeafe] text-[#3b82f6]'
+          }`}>
+            <Icon size={16} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h4 className="font-bold text-sm mb-0.5">{signal.title}</h4>
+            <p className="text-xs text-muted-foreground">{signal.description}</p>
+          </div>
+          <button
+            onClick={onDismiss}
+            className="flex-shrink-0 text-muted-foreground hover:text-foreground"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M18 6L6 18M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
 export default function Home() {
-  const [selectedMonth, setSelectedMonth] = useState(getCurrentMonth())
-  const [monthStats, setMonthStats] = useState<MonthStats | null>(null)
-  const [topCategories, setTopCategories] = useState<TopCategory[]>([])
+  const [dateRange, setDateRange] = useState<DateRange>('last90')
+  const [customMonth, setCustomMonth] = useState<string>('')
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null)
+  const [stats, setStats] = useState<DashboardStats | null>(null)
+  const [topCategories, setTopCategories] = useState<TopItem[]>([])
+  const [topVendors, setTopVendors] = useState<TopItem[]>([])
   const [trendData, setTrendData] = useState<TrendData[]>([])
+  const [categoryTrendData, setCategoryTrendData] = useState<TrendData[]>([])
   const [signals, setSignals] = useState<Signal[]>([])
-  const [dismissedSignals, setDismissedSignals] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(true)
-  const [showRollingAvg, setShowRollingAvg] = useState(false)
+  const [categoryTransactions, setCategoryTransactions] = useState<any[]>([])
+  const [loadingCategory, setLoadingCategory] = useState(false)
+  const [loadingCategoryTrend, setLoadingCategoryTrend] = useState(false)
 
-  const monthOptions = getMonthOptions(12)
+  // Calculate date range
+  const getDateRangeParams = () => {
+    const today = new Date()
+    let startDate: Date
+    let endDate = today
 
-  // Fetch data for Overview tab
+    switch (dateRange) {
+      case 'last60':
+        startDate = new Date(today.getTime() - 60 * 24 * 60 * 60 * 1000)
+        break
+      case 'last90':
+        startDate = new Date(today.getTime() - 90 * 24 * 60 * 60 * 1000)
+        break
+      case 'last180':
+        startDate = new Date(today.getTime() - 180 * 24 * 60 * 60 * 1000)
+        break
+      case 'last365':
+        startDate = new Date(today.getTime() - 365 * 24 * 60 * 60 * 1000)
+        break
+      case 'year2024':
+        startDate = new Date(2024, 0, 1)
+        endDate = new Date(2024, 11, 31)
+        break
+      case 'year2025':
+        startDate = new Date(2025, 0, 1)
+        endDate = new Date(2025, 11, 31)
+        break
+      case 'year2026':
+        startDate = new Date(2026, 0, 1)
+        endDate = new Date(2026, 11, 31)
+        break
+      case 'custom':
+        if (!customMonth) return null
+        const [year, month] = customMonth.split('-')
+        startDate = new Date(parseInt(year), parseInt(month) - 1, 1)
+        endDate = new Date(parseInt(year), parseInt(month), 0)
+        break
+      default:
+        startDate = new Date(today.getTime() - 90 * 24 * 60 * 60 * 1000)
+    }
+
+    return {
+      start: startDate.toISOString().split('T')[0],
+      end: endDate.toISOString().split('T')[0]
+    }
+  }
+
+  // Fetch dashboard data
   useEffect(() => {
-    const fetchOverviewData = async () => {
+    const fetchData = async () => {
+      const dateParams = getDateRangeParams()
+      if (!dateParams) return
+
       setLoading(true)
 
       try {
-        // Fetch monthly summary for selected month
-        const { data: monthData, error: monthError } = await supabase
-          .from('monthly_summary')
-          .select('*')
-          .eq('month', selectedMonth)
+        // Fetch transactions for the period
+        const { data: transactions } = await supabase
+          .from('transactions')
+          .select('amount, direction, normalized_vendor, category_id, categories(name, color)')
+          .gte('date', dateParams.start)
+          .lte('date', dateParams.end)
+          .eq('is_transfer', false)
 
-        if (monthError) throw monthError
+        if (!transactions) return
 
-        // Calculate totals for the month
-        const totalExpenses = monthData?.reduce((sum, row) => sum + (row.expenses_cents || 0), 0) || 0
-        const totalIncome = monthData?.reduce((sum, row) => sum + (row.income_cents || 0), 0) || 0
+        // Calculate stats
+        const expenses = transactions
+          .filter(t => t.direction === 'debit')
+          .reduce((sum, t) => sum + t.amount, 0)
 
-        // Fetch previous month for trend calculation
-        const prevMonthDate = new Date(selectedMonth)
-        prevMonthDate.setMonth(prevMonthDate.getMonth() - 1)
-        const prevMonth = `${prevMonthDate.getFullYear()}-${String(prevMonthDate.getMonth() + 1).padStart(2, '0')}-01`
+        const income = transactions
+          .filter(t => t.direction === 'credit')
+          .reduce((sum, t) => sum + t.amount, 0)
 
-        const { data: prevMonthData } = await supabase
-          .from('monthly_summary')
-          .select('*')
-          .eq('month', prevMonth)
+        // Previous period for trends (same duration)
+        const duration = new Date(dateParams.end).getTime() - new Date(dateParams.start).getTime()
+        const prevEnd = new Date(new Date(dateParams.start).getTime() - 24 * 60 * 60 * 1000)
+        const prevStart = new Date(prevEnd.getTime() - duration)
 
-        const prevExpenses = prevMonthData?.reduce((sum, row) => sum + (row.expenses_cents || 0), 0) || 0
-        const prevIncome = prevMonthData?.reduce((sum, row) => sum + (row.income_cents || 0), 0) || 0
+        const { data: prevTransactions } = await supabase
+          .from('transactions')
+          .select('amount, direction')
+          .gte('date', prevStart.toISOString().split('T')[0])
+          .lte('date', prevEnd.toISOString().split('T')[0])
+          .eq('is_transfer', false)
 
-        setMonthStats({
-          expenses: totalExpenses,
-          income: totalIncome,
-          net: totalIncome - totalExpenses,
-          expensesTrend: calculatePercentChange(prevExpenses, totalExpenses),
-          incomeTrend: calculatePercentChange(prevIncome, totalIncome)
+        const prevExpenses = prevTransactions
+          ?.filter(t => t.direction === 'debit')
+          .reduce((sum, t) => sum + t.amount, 0) || 0
+
+        const prevIncome = prevTransactions
+          ?.filter(t => t.direction === 'credit')
+          .reduce((sum, t) => sum + t.amount, 0) || 0
+
+        setStats({
+          expenses,
+          income,
+          net: income - expenses,
+          expensesTrend: calculatePercentChange(prevExpenses, expenses),
+          incomeTrend: calculatePercentChange(prevIncome, income)
         })
 
-        // Fetch top 5 categories for selected month
-        const { data: categoryData } = await supabase
-          .from('monthly_summary')
-          .select('category_name, category_color, expenses_cents')
-          .eq('month', selectedMonth)
-          .not('category_name', 'is', null)
-          .order('expenses_cents', { ascending: false })
-          .limit(5)
-
-        // Get previous month data for each category
-        const topCats: TopCategory[] = []
-        for (const cat of categoryData || []) {
-          const { data: prevCatData } = await supabase
-            .from('monthly_summary')
-            .select('expenses_cents')
-            .eq('month', prevMonth)
-            .eq('category_name', cat.category_name)
-            .maybeSingle()
-
-          topCats.push({
-            category_name: cat.category_name,
-            category_color: cat.category_color || '#3b82f6',
-            expenses_cents: cat.expenses_cents || 0,
-            prev_month_expenses: prevCatData?.expenses_cents || 0
+        // Top categories
+        const categoryMap = new Map<string, { amount: number; color: string }>()
+        transactions
+          .filter(t => t.direction === 'debit' && t.categories)
+          .forEach(t => {
+            const name = (t.categories as any).name
+            const color = (t.categories as any).color
+            const existing = categoryMap.get(name) || { amount: 0, color: color || '#3b82f6' }
+            categoryMap.set(name, { amount: existing.amount + t.amount, color: existing.color })
           })
-        }
+
+        const topCats = Array.from(categoryMap.entries())
+          .map(([name, { amount, color }]) => ({
+            name,
+            expenses_cents: amount,
+            prev_period_expenses: 0, // TODO: Calculate from prev period
+            color
+          }))
+          .sort((a, b) => b.expenses_cents - a.expenses_cents)
+          .slice(0, 5)
 
         setTopCategories(topCats)
 
+        // Top vendors
+        const vendorMap = new Map<string, number>()
+        transactions
+          .filter(t => t.direction === 'debit' && t.normalized_vendor)
+          .forEach(t => {
+            const existing = vendorMap.get(t.normalized_vendor!) || 0
+            vendorMap.set(t.normalized_vendor!, existing + t.amount)
+          })
+
+        const topVends = Array.from(vendorMap.entries())
+          .map(([name, amount]) => ({
+            name,
+            expenses_cents: amount,
+            prev_period_expenses: 0
+          }))
+          .sort((a, b) => b.expenses_cents - a.expenses_cents)
+          .slice(0, 5)
+
+        setTopVendors(topVends)
+
+        // Trend data (last 6 months) - aggregate from monthly_summary
+        const sixMonthsAgo = new Date()
+        sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6)
+        const sixMonthsAgoStr = `${sixMonthsAgo.getFullYear()}-${String(sixMonthsAgo.getMonth() + 1).padStart(2, '0')}-01`
+
+        const { data: monthlySummary } = await supabase
+          .from('monthly_summary')
+          .select('month, expenses_cents, income_cents')
+          .gte('month', sixMonthsAgoStr)
+          .order('month', { ascending: true })
+
+        // Aggregate by month
+        const trendMap = new Map<string, { expenses: number; income: number }>()
+        monthlySummary?.forEach(row => {
+          if (!row.month) return
+          const existing = trendMap.get(row.month) || { expenses: 0, income: 0 }
+          trendMap.set(row.month, {
+            expenses: existing.expenses + (row.expenses_cents || 0),
+            income: existing.income + (row.income_cents || 0)
+          })
+        })
+
+        const trends = Array.from(trendMap.entries()).map(([month, data]) => ({
+          month,
+          expenses: data.expenses,
+          income: data.income
+        }))
+
+        setTrendData(trends)
+
+        // Fetch signals - mock data for now since RPC functions may not be available
+        const mockSignals: Signal[] = []
+
+        // Check for large transactions in current period
+        const largeTransactions = transactions
+          .filter(t => t.direction === 'debit' && t.amount > 10000)
+          .slice(0, 3)
+
+        largeTransactions.forEach(t => {
+          mockSignals.push({
+            type: 'LARGE_TRANSACTION',
+            title: `Large Expense: ${t.normalized_vendor || 'Unknown'}`,
+            description: `${formatAmount(t.amount)} - This is above your typical spending`,
+            severity: t.amount > 20000 ? 'alert' : 'warning',
+            id: `large_${t.normalized_vendor}_${t.amount}`
+          })
+        })
+
+        // Check for spending increase
+        const expensesTrend = calculatePercentChange(prevExpenses, expenses)
+        if (expensesTrend > 15) {
+          mockSignals.push({
+            type: 'TREND_UP',
+            title: 'Spending Increased',
+            description: `Your expenses increased by ${expensesTrend.toFixed(1)}% compared to the previous period`,
+            severity: 'warning',
+            id: 'trend_up_overall'
+          })
+        }
+
+        setSignals(mockSignals)
+
       } catch (error) {
-        console.error('Error fetching overview data:', error)
+        console.error('Error fetching dashboard data:', error)
       } finally {
         setLoading(false)
       }
     }
 
-    fetchOverviewData()
-  }, [selectedMonth])
+    fetchData()
+  }, [dateRange, customMonth])
 
-  // Fetch trend data (monthly_trends view)
+  // Fetch category transactions when selected
   useEffect(() => {
-    const fetchTrendData = async () => {
+    const fetchCategoryTransactions = async () => {
+      if (!selectedCategory) {
+        setCategoryTransactions([])
+        return
+      }
+
+      const dateParams = getDateRangeParams()
+      if (!dateParams) return
+
+      setLoadingCategory(true)
+
       try {
-        const { data, error } = await supabase
-          .from('monthly_trends')
-          .select('*')
+        const { data: transactions } = await supabase
+          .from('transactions')
+          .select('id, date, amount, direction, normalized_vendor, raw_vendor, categories(name)')
+          .gte('date', dateParams.start)
+          .lte('date', dateParams.end)
+          .eq('is_transfer', false)
+          .eq('direction', 'debit')
+
+        const filtered = transactions?.filter(t =>
+          (t.categories as any)?.name === selectedCategory
+        ) || []
+
+        // Sort by date descending
+        filtered.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+
+        setCategoryTransactions(filtered)
+      } catch (error) {
+        console.error('Error fetching category transactions:', error)
+      } finally {
+        setLoadingCategory(false)
+      }
+    }
+
+    fetchCategoryTransactions()
+  }, [selectedCategory, dateRange, customMonth])
+
+  // Fetch category trend data when selected
+  useEffect(() => {
+    const fetchCategoryTrend = async () => {
+      if (!selectedCategory) {
+        setCategoryTrendData([])
+        return
+      }
+
+      setLoadingCategoryTrend(true)
+
+      try {
+        // Fetch last 6 months of data for this category
+        const sixMonthsAgo = new Date()
+        sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6)
+        const sixMonthsAgoStr = `${sixMonthsAgo.getFullYear()}-${String(sixMonthsAgo.getMonth() + 1).padStart(2, '0')}-01`
+
+        const { data: monthlySummary } = await supabase
+          .from('monthly_summary')
+          .select('month, category_name, expenses_cents')
+          .eq('category_name', selectedCategory)
+          .gte('month', sixMonthsAgoStr)
           .order('month', { ascending: true })
-          .limit(12)
 
-        if (error) throw error
+        // Group by month
+        const trendMap = new Map<string, number>()
+        monthlySummary?.forEach(row => {
+          if (!row.month) return
+          const existing = trendMap.get(row.month) || 0
+          trendMap.set(row.month, existing + (row.expenses_cents || 0))
+        })
 
-        setTrendData(data || [])
+        const trends = Array.from(trendMap.entries()).map(([month, expenses]) => ({
+          month,
+          expenses,
+          income: 0 // Not relevant for category view
+        }))
+
+        setCategoryTrendData(trends)
       } catch (error) {
-        console.error('Error fetching trend data:', error)
+        console.error('Error fetching category trend:', error)
+      } finally {
+        setLoadingCategoryTrend(false)
       }
     }
 
-    fetchTrendData()
-  }, [])
+    fetchCategoryTrend()
+  }, [selectedCategory])
 
-  // Fetch signals from detection functions
-  useEffect(() => {
-    const fetchSignals = async () => {
-      try {
-        const detectedSignals: Signal[] = []
+  const handleDismissSignal = async (signalId: string, _signalType: string) => {
+    // Filter out the signal from display
+    setSignals(prev => prev.filter(s => s.id !== signalId))
 
-        // Fetch trend signals
-        const { data: trendSignals } = await supabase.rpc('detect_trend_signals')
-        trendSignals?.forEach((sig: TrendSignalResponse) => {
-          const key = `${sig.signal_type}:${sig.category_name}:${sig.month}`
-          if (!dismissedSignals.has(key)) {
-            detectedSignals.push({
-              type: sig.signal_type,
-              title: `${sig.signal_type === 'TREND_UP' ? 'Increase' : 'Decrease'}: ${sig.category_name}`,
-              description: `Spending ${sig.signal_type === 'TREND_UP' ? 'increased' : 'decreased'} by ${Math.abs(sig.change_pct).toFixed(1)}% over the last 3 months`,
-              severity: sig.severity,
-              id: key
-            })
-          }
-        })
-
-        // Fetch subscription signals
-        const { data: subSignals } = await supabase.rpc('detect_subscriptions')
-        subSignals?.slice(0, 5).forEach((sig: SubscriptionSignalResponse) => {
-          const key = `SUBSCRIPTION:${sig.normalized_vendor}`
-          if (!dismissedSignals.has(key)) {
-            detectedSignals.push({
-              type: 'SUBSCRIPTION',
-              title: `Subscription Detected: ${sig.normalized_vendor}`,
-              description: `${sig.frequency} charge of ${formatAmount(sig.typical_amount)} (${sig.confidence} confidence)`,
-              severity: sig.confidence === 'high' ? 'info' : 'warning',
-              id: key
-            })
-          }
-        })
-
-        // Fetch large transaction signals
-        const { data: largeSignals } = await supabase.rpc('detect_large_transactions', {
-          lookback_months: 3,
-          threshold_cents: 10000
-        })
-        largeSignals?.slice(0, 3).forEach((sig: LargeTransactionSignalResponse) => {
-          const key = `LARGE_TRANSACTION:${sig.transaction_id}`
-          if (!dismissedSignals.has(key)) {
-            detectedSignals.push({
-              type: 'LARGE_TRANSACTION',
-              title: 'Large One-off Expense',
-              description: `${formatAmount(sig.amount)} at "${sig.vendor}" on ${sig.date}`,
-              severity: sig.amount > 20000 ? 'alert' : 'warning',
-              id: key
-            })
-          }
-        })
-
-        // Fetch new merchant signals
-        const { data: newMerchants } = await supabase.rpc('detect_new_merchants', { lookback_days: 30 })
-        newMerchants?.slice(0, 3).forEach((sig: NewMerchantSignalResponse) => {
-          const key = `NEW_MERCHANT:${sig.vendor}`
-          if (!dismissedSignals.has(key)) {
-            detectedSignals.push({
-              type: 'NEW_MERCHANT',
-              title: `New Merchant: ${sig.vendor}`,
-              description: `First purchase on ${sig.first_occurrence} (${formatAmount(sig.amount)})`,
-              severity: 'info',
-              id: key
-            })
-          }
-        })
-
-        setSignals(detectedSignals)
-      } catch (error) {
-        console.error('Error fetching signals:', error)
-      }
-    }
-
-    fetchSignals()
-  }, [dismissedSignals])
-
-  const handleDismissSignal = async (signalId: string, signalType: string) => {
-    try {
-      // Store dismissal in database
-      await supabase.from('dismissed_signals').insert({
-        signal_type: signalType,
-        signal_key: signalId
-      })
-
-      // Update local state
-      setDismissedSignals(prev => new Set([...prev, signalId]))
-    } catch (error) {
-      console.error('Error dismissing signal:', error)
-    }
+    // Note: dismissed_signals table storage could be implemented later if needed
   }
 
   if (loading) {
     return <div className="flex items-center justify-center h-64">Laden...</div>
   }
 
+  const displayLabel = dateRange === 'custom' && customMonth
+    ? formatMonthLong(customMonth + '-01')
+    : dateRange === 'last60' ? 'Last 60 Days'
+    : dateRange === 'last90' ? 'Last 90 Days'
+    : dateRange === 'last180' ? 'Last 180 Days'
+    : dateRange === 'last365' ? 'Last Year'
+    : dateRange === 'year2024' ? '2024'
+    : dateRange === 'year2025' ? '2025'
+    : dateRange === 'year2026' ? '2026'
+    : 'Last 90 Days'
+
   return (
-    <div>
-      {/* Header with Month Selector */}
-      <div className="flex items-center justify-between mb-10">
-        <h2 className="text-4xl font-bold font-heading tracking-tight">{formatMonthLong(selectedMonth)}</h2>
-        <div className="flex items-center gap-4">
-          <Select value={selectedMonth} onValueChange={setSelectedMonth}>
-            <SelectTrigger className="w-[200px] border-2 font-semibold">
+    <div className="pb-12">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-8">
+        <h2 className="text-3xl font-bold font-heading tracking-tight">{displayLabel}</h2>
+        <div className="flex items-center gap-3">
+          <Select value={dateRange} onValueChange={(v) => setDateRange(v as DateRange)}>
+            <SelectTrigger className="w-[180px] border-2 font-semibold">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {monthOptions.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
+              <SelectItem value="last60">Last 60 Days</SelectItem>
+              <SelectItem value="last90">Last 90 Days</SelectItem>
+              <SelectItem value="last180">Last 180 Days</SelectItem>
+              <SelectItem value="last365">Last 365 Days</SelectItem>
+              <SelectItem value="year2024">2024</SelectItem>
+              <SelectItem value="year2025">2025</SelectItem>
+              <SelectItem value="year2026">2026</SelectItem>
+              <SelectItem value="custom">Custom Month</SelectItem>
             </SelectContent>
           </Select>
+
+          {dateRange === 'custom' && (
+            <input
+              type="month"
+              value={customMonth}
+              onChange={(e) => setCustomMonth(e.target.value)}
+              className="border-2 border-border rounded-md px-3 py-2 font-semibold text-sm"
+            />
+          )}
+
           <Link to="/import">
             <Button className="gap-2 shadow-md hover:shadow-lg transition-all">
               <Upload size={18} />
@@ -345,256 +505,282 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Tabs */}
-      <Tabs defaultValue="overview" className="w-full">
-        <TabsList className="grid w-full grid-cols-3 mb-8 border-b-2 border-border bg-transparent h-auto p-0 rounded-none">
-          <TabsTrigger
-            value="overview"
-            className="font-heading font-bold text-base text-muted-foreground data-[state=active]:text-secondary data-[state=active]:border-b-[3px] data-[state=active]:border-primary rounded-none pb-4 data-[state=active]:bg-transparent hover:text-secondary transition-colors"
-          >
-            Overview
-          </TabsTrigger>
-          <TabsTrigger
-            value="trends"
-            className="font-heading font-bold text-base text-muted-foreground data-[state=active]:text-secondary data-[state=active]:border-b-[3px] data-[state=active]:border-primary rounded-none pb-4 data-[state=active]:bg-transparent hover:text-secondary transition-colors"
-          >
-            Trends
-          </TabsTrigger>
-          <TabsTrigger
-            value="signals"
-            className="font-heading font-bold text-base text-muted-foreground data-[state=active]:text-secondary data-[state=active]:border-b-[3px] data-[state=active]:border-primary rounded-none pb-4 data-[state=active]:bg-transparent hover:text-secondary transition-colors flex items-center gap-2"
-          >
-            Signals
-            {signals.length > 0 && (
-              <Badge variant="secondary" className="bg-[#fef3c7] text-[#92400e] font-bold text-[0.7em] px-2 py-0.5">
-                {signals.length}
-              </Badge>
-            )}
-          </TabsTrigger>
-        </TabsList>
+      {/* Key Metrics */}
+      <div className="grid grid-cols-3 gap-6 mb-8">
+        <MetricCard
+          label="Expenses"
+          value={formatAmount(stats?.expenses || 0)}
+          trend={stats?.expensesTrend}
+        />
+        <MetricCard
+          label="Income"
+          value={formatAmount(stats?.income || 0)}
+          trend={stats?.incomeTrend}
+        />
+        <MetricCard
+          label="Net Balance"
+          value={formatAmount(Math.abs(stats?.net || 0))}
+          valueColor={(stats?.net || 0) >= 0 ? 'text-[var(--success)]' : 'text-[var(--destructive)]'}
+        />
+      </div>
 
-        {/* Overview Tab */}
-        <TabsContent value="overview" className="space-y-6 animate-in fade-in-50 duration-300">
-          {/* Key Metrics */}
-          <div className="grid grid-cols-3 gap-6">
-            <MetricCard
-              label="Expenses"
-              value={formatAmount(monthStats?.expenses || 0)}
-              trend={monthStats?.expensesTrend}
-            />
-            <MetricCard
-              label="Income"
-              value={formatAmount(monthStats?.income || 0)}
-              trend={monthStats?.incomeTrend}
-            />
-            <MetricCard
-              label="Net Balance"
-              value={formatAmount(Math.abs(monthStats?.net || 0))}
-              valueColor={(monthStats?.net || 0) >= 0 ? 'text-[var(--success)]' : 'text-[var(--destructive)]'}
-            />
-          </div>
-
-          {/* Top Categories */}
-          <Card className="hover:shadow-md transition-all duration-200">
-            <CardContent className="p-8">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-6">
-                Top Categories
-              </h3>
-              {topCategories.length === 0 ? (
-                <div className="text-center py-12 text-muted-foreground">
-                  <p className="font-semibold">No category data available for this month.</p>
-                  <p className="text-sm mt-2">Import transactions to see spending breakdown.</p>
-                </div>
-              ) : (
-                <table className="w-full">
-                  <thead>
-                    <tr className="border-b-2 border-border">
-                      <th className="text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground pb-4">
-                        Category
-                      </th>
-                      <th className="text-right text-xs font-semibold uppercase tracking-wider text-muted-foreground pb-4">
-                        Amount
-                      </th>
-                      <th className="text-right text-xs font-semibold uppercase tracking-wider text-muted-foreground pb-4">
-                        Change
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {topCategories.map((cat) => {
-                      const trend = calculatePercentChange(cat.prev_month_expenses, cat.expenses_cents)
-                      return (
-                        <tr key={cat.category_name} className="border-b border-border hover:bg-[#fafafa] transition-colors">
-                          <td className="py-4 font-semibold">{cat.category_name}</td>
-                          <td className="py-4 text-right font-heading font-semibold text-base">
-                            {formatAmount(cat.expenses_cents)}
-                          </td>
-                          <td className="py-4 text-right">
-                            <span className={`inline-flex items-center text-xs font-bold px-2.5 py-1 rounded-full uppercase ${
-                              trend > 0
-                                ? 'bg-[var(--destructive-light)] text-[#991b1b]'
-                                : trend < 0
-                                  ? 'bg-[var(--success-light)] text-[#166534]'
-                                  : 'bg-muted text-muted-foreground'
-                            }`}>
-                              {trend > 0 ? '+' : ''}{trend.toFixed(0)}%
-                            </span>
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* Trends Tab */}
-        <TabsContent value="trends" className="space-y-6">
-          <Card className="hover:shadow-md transition-all duration-200">
-            <CardContent className="p-8">
-              <div className="flex items-center justify-between mb-6">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
-                  Monthly Trends (12 Months)
-                </h3>
-                <label className="flex items-center gap-2 text-sm font-bold cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={showRollingAvg}
-                    onChange={(e) => setShowRollingAvg(e.target.checked)}
-                    className="accent-primary w-4 h-4"
-                  />
-                  Rolling 3-month avg
-                </label>
+      {/* Top Categories & Top Vendors */}
+      <div className="grid grid-cols-2 gap-6 mb-8">
+        <Card className="hover:shadow-md transition-all duration-200">
+          <CardContent className="p-6">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-5">
+              Top Categories
+            </h3>
+            {topCategories.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">
+                <p className="text-sm">No category data available</p>
               </div>
-              {trendData.length < 2 ? (
-                <div className="text-center py-16 text-muted-foreground">
-                  <p className="font-bold text-lg">Insufficient data for trend analysis</p>
-                  <p className="text-sm mt-2">Import at least 2 months of transactions to see trends.</p>
-                  <p className="text-sm mt-1">(Currently: {trendData.length} month{trendData.length !== 1 ? 's' : ''})</p>
-                </div>
-              ) : (
-                <ResponsiveContainer width="100%" height={400}>
-                  <LineChart data={trendData}>
-                    <XAxis
-                      dataKey="month"
-                      tickFormatter={(m) => formatMonth(m)}
-                      stroke="#6b7280"
-                      style={{ fontSize: '0.8rem', fontWeight: 600 }}
-                    />
-                    <YAxis
-                      tickFormatter={(v) => formatCompactAmount(v)}
-                      stroke="#6b7280"
-                      style={{ fontSize: '0.8rem', fontWeight: 600 }}
-                    />
-                    <Tooltip
-                      formatter={(value) => formatAmount(value as number)}
-                      labelFormatter={(label) => formatMonthLong(label)}
-                      contentStyle={{
-                        backgroundColor: 'white',
-                        border: '2px solid #e5e7eb',
-                        borderRadius: '8px',
-                        padding: '12px',
-                        fontWeight: 600
-                      }}
-                    />
-                    <Legend
-                      wrapperStyle={{ paddingTop: '20px', fontWeight: 600 }}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="expenses"
-                      stroke="#ef4444"
-                      name="Expenses"
-                      strokeWidth={3}
-                      dot={{ r: 4, strokeWidth: 2, fill: '#fff' }}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="income"
-                      stroke="#22c55e"
-                      name="Income"
-                      strokeWidth={3}
-                      dot={{ r: 4, strokeWidth: 2, fill: '#fff' }}
-                    />
-                    {showRollingAvg && (
-                      <Line
-                        type="monotone"
-                        dataKey="rolling_avg_3m"
-                        stroke="#3b82f6"
-                        name="3-Month Avg"
-                        strokeWidth={3}
-                        strokeDasharray="5 5"
-                        dot={{ r: 4, strokeWidth: 2, fill: '#fff' }}
+            ) : (
+              <div className="space-y-3">
+                {topCategories.map((cat) => (
+                  <button
+                    key={cat.name}
+                    onClick={() => setSelectedCategory(selectedCategory === cat.name ? null : cat.name)}
+                    className={`w-full flex items-center justify-between py-2 px-2 rounded transition-colors ${
+                      selectedCategory === cat.name
+                        ? 'bg-primary/10 ring-2 ring-primary'
+                        : 'hover:bg-muted/30'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div
+                        className="w-3 h-3 rounded-full"
+                        style={{ backgroundColor: cat.color || '#3b82f6' }}
                       />
-                    )}
-                  </LineChart>
-                </ResponsiveContainer>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
+                      <span className="font-semibold text-sm">{cat.name}</span>
+                    </div>
+                    <span className="font-heading font-bold text-sm">
+                      {formatAmount(cat.expenses_cents)}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
-        {/* Signals Tab */}
-        <TabsContent value="signals" className="space-y-6">
-          {signals.length === 0 ? (
-            <Card className="hover:shadow-md transition-all duration-200">
-              <CardContent className="p-16 text-center">
-                <div className="text-7xl mb-6">🎉</div>
-                <h3 className="text-2xl font-bold mb-3">Alles im grünen Bereich!</h3>
-                <p className="text-muted-foreground text-base max-w-lg mx-auto">
-                  No unusual patterns detected. Signals appear when spending changes significantly,
-                  new subscriptions are found, or large one-time expenses occur.
-                </p>
-              </CardContent>
-            </Card>
-          ) : (
-            signals.map((signal) => (
-              <Card
-                key={signal.id}
-                className={`border-l-[6px] hover:shadow-md transition-all duration-200 ${
-                  signal.severity === 'alert' ? 'border-l-[#ef4444]' :
-                  signal.severity === 'warning' ? 'border-l-[#f59e0b]' :
-                  'border-l-[#3b82f6]'
-                }`}
+        <Card className="hover:shadow-md transition-all duration-200">
+          <CardContent className="p-6">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-5">
+              Top Vendors
+            </h3>
+            {topVendors.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">
+                <p className="text-sm">No vendor data available</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {topVendors.map((vendor) => (
+                  <div key={vendor.name} className="flex items-center justify-between py-2 hover:bg-muted/30 px-2 rounded transition-colors">
+                    <span className="font-semibold text-sm">{vendor.name}</span>
+                    <span className="font-heading font-bold text-sm">
+                      {formatAmount(vendor.expenses_cents)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Category Details */}
+      {selectedCategory && (
+        <Card className="hover:shadow-md transition-all duration-200 mb-8">
+          <CardContent className="p-6">
+            <div className="flex items-center justify-between mb-5">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                {selectedCategory} - Transactions
+              </h3>
+              <button
+                onClick={() => setSelectedCategory(null)}
+                className="text-sm font-semibold text-muted-foreground hover:text-foreground"
               >
-                <CardContent className="p-8">
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-start gap-6 flex-1">
-                      <div className={`flex items-center justify-center w-12 h-12 rounded-full text-2xl ${
-                        signal.severity === 'alert' ? 'bg-[#fee2e2] text-[#ef4444]' :
-                        signal.severity === 'warning' ? 'bg-[#fef3c7] text-[#f59e0b]' :
-                        'bg-[#dbeafe] text-[#3b82f6]'
-                      }`}>
-                        {signal.type === 'TREND_UP' || signal.type === 'TREND_DOWN' ? (
-                          <TrendingUp size={24} />
-                        ) : signal.type === 'SUBSCRIPTION' ? (
-                          <Bell size={24} />
-                        ) : (
-                          <AlertTriangle size={24} />
-                        )}
+                Close ✕
+              </button>
+            </div>
+            {loadingCategory ? (
+              <div className="text-center py-8 text-muted-foreground">
+                <p className="text-sm">Loading...</p>
+              </div>
+            ) : categoryTransactions.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">
+                <p className="text-sm">No transactions found</p>
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-[400px] overflow-y-auto">
+                {categoryTransactions.map((tx) => (
+                  <div
+                    key={tx.id}
+                    className="flex items-center justify-between py-2 px-3 hover:bg-muted/30 rounded transition-colors border-b border-border last:border-0"
+                  >
+                    <div className="flex-1">
+                      <div className="font-semibold text-sm">
+                        {tx.normalized_vendor || tx.raw_vendor || 'Unknown'}
                       </div>
-                      <div className="flex-1">
-                        <h4 className="font-bold text-lg mb-1">{signal.title}</h4>
-                        <p className="text-muted-foreground">{signal.description}</p>
+                      <div className="text-xs text-muted-foreground">
+                        {new Date(tx.date).toLocaleDateString('de-DE')}
                       </div>
                     </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleDismissSignal(signal.id, signal.type)}
-                      className="ml-4 hover:bg-muted"
-                    >
-                      <X size={18} />
-                    </Button>
+                    <div className="font-heading font-bold text-sm">
+                      {formatAmount(tx.amount)}
+                    </div>
                   </div>
-                </CardContent>
-              </Card>
-            ))
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Spending Trends */}
+      <Card className="hover:shadow-md transition-all duration-200 mb-8">
+        <CardContent className="p-6">
+          <div className="flex items-center justify-between mb-5">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+              {selectedCategory ? `${selectedCategory} - Spending Trend` : 'Spending Trends (Last 6 Months)'}
+            </h3>
+            {selectedCategory && (
+              <button
+                onClick={() => setSelectedCategory(null)}
+                className="text-xs font-semibold text-muted-foreground hover:text-foreground"
+              >
+                Show All Categories
+              </button>
+            )}
+          </div>
+
+          {loadingCategoryTrend ? (
+            <div className="text-center py-12 text-muted-foreground">
+              <p className="font-semibold">Loading trend data...</p>
+            </div>
+          ) : selectedCategory ? (
+            categoryTrendData.length < 2 ? (
+              <div className="text-center py-12 text-muted-foreground">
+                <p className="font-semibold">Insufficient data for trend analysis</p>
+                <p className="text-sm mt-2">Need at least 2 months of data for {selectedCategory}.</p>
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height={300}>
+                <LineChart data={categoryTrendData}>
+                  <XAxis
+                    dataKey="month"
+                    tickFormatter={(m) => formatMonth(m)}
+                    stroke="#6b7280"
+                    style={{ fontSize: '0.75rem', fontWeight: 600 }}
+                  />
+                  <YAxis
+                    tickFormatter={(v) => formatCompactAmount(v)}
+                    stroke="#6b7280"
+                    style={{ fontSize: '0.75rem', fontWeight: 600 }}
+                  />
+                  <Tooltip
+                    formatter={(value) => formatAmount(value as number)}
+                    labelFormatter={(label) => formatMonthLong(label)}
+                    contentStyle={{
+                      backgroundColor: 'white',
+                      border: '2px solid #e5e7eb',
+                      borderRadius: '8px',
+                      padding: '8px',
+                      fontSize: '0.875rem',
+                      fontWeight: 600
+                    }}
+                  />
+                  <Legend wrapperStyle={{ paddingTop: '16px', fontSize: '0.875rem', fontWeight: 600 }} />
+                  <Line
+                    type="monotone"
+                    dataKey="expenses"
+                    stroke="#3b82f6"
+                    name={selectedCategory}
+                    strokeWidth={2.5}
+                    dot={{ r: 3, strokeWidth: 2, fill: '#fff' }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            )
+          ) : (
+            trendData.length < 2 ? (
+              <div className="text-center py-12 text-muted-foreground">
+                <p className="font-semibold">Insufficient data for trend analysis</p>
+                <p className="text-sm mt-2">Import at least 2 months of transactions.</p>
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height={300}>
+                <LineChart data={trendData}>
+                  <XAxis
+                    dataKey="month"
+                    tickFormatter={(m) => formatMonth(m)}
+                    stroke="#6b7280"
+                    style={{ fontSize: '0.75rem', fontWeight: 600 }}
+                  />
+                  <YAxis
+                    tickFormatter={(v) => formatCompactAmount(v)}
+                    stroke="#6b7280"
+                    style={{ fontSize: '0.75rem', fontWeight: 600 }}
+                  />
+                  <Tooltip
+                    formatter={(value) => formatAmount(value as number)}
+                    labelFormatter={(label) => formatMonthLong(label)}
+                    contentStyle={{
+                      backgroundColor: 'white',
+                      border: '2px solid #e5e7eb',
+                      borderRadius: '8px',
+                      padding: '8px',
+                      fontSize: '0.875rem',
+                      fontWeight: 600
+                    }}
+                  />
+                  <Legend wrapperStyle={{ paddingTop: '16px', fontSize: '0.875rem', fontWeight: 600 }} />
+                  <Line
+                    type="monotone"
+                    dataKey="expenses"
+                    stroke="#ef4444"
+                    name="Expenses"
+                    strokeWidth={2.5}
+                    dot={{ r: 3, strokeWidth: 2, fill: '#fff' }}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="income"
+                    stroke="#22c55e"
+                    name="Income"
+                    strokeWidth={2.5}
+                    dot={{ r: 3, strokeWidth: 2, fill: '#fff' }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            )
           )}
-        </TabsContent>
-      </Tabs>
+        </CardContent>
+      </Card>
+
+      {/* Signals */}
+      {signals.length > 0 && (
+        <div>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-bold font-heading">
+              Signals
+              <Badge variant="secondary" className="ml-2 bg-[#fef3c7] text-[#92400e] font-bold">
+                {signals.length}
+              </Badge>
+            </h3>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            {signals.map((signal) => (
+              <SignalCard
+                key={signal.id}
+                signal={signal}
+                onDismiss={() => handleDismissSignal(signal.id, signal.type)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
