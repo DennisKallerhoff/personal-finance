@@ -1,9 +1,11 @@
-import { useState, useEffect } from 'react'
+import React, { useState, useEffect } from 'react'
 import { Link } from 'react-router'
-import { Upload, TrendingUp, TrendingDown, AlertCircle, Bell } from 'lucide-react'
+import { Upload, TrendingUp, TrendingDown, AlertCircle, Bell, Search } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { supabase } from '@/lib/supabase'
 import {
@@ -13,7 +15,7 @@ import {
   calculatePercentChange,
   formatCompactAmount
 } from '@/lib/format'
-import { ResponsiveContainer, XAxis, YAxis, Tooltip, LineChart, Line, Legend } from 'recharts'
+import { ResponsiveContainer, XAxis, YAxis, Tooltip, LineChart, Line, Legend, Treemap } from 'recharts'
 
 // Types
 interface DashboardStats {
@@ -46,6 +48,33 @@ interface Signal {
 }
 
 type DateRange = 'last60' | 'last90' | 'last180' | 'last365' | 'year2024' | 'year2025' | 'year2026' | 'custom'
+
+interface TreemapNode {
+  name: string
+  color?: string
+  icon?: string
+  size?: number              // For leaf nodes (no children)
+  children?: TreemapNode[]   // For parent nodes
+}
+
+interface CustomTreemapContentProps {
+  x?: number
+  y?: number
+  width?: number
+  height?: number
+  name?: string
+  value?: number
+  color?: string
+  depth?: number
+  root?: any
+  index?: number
+}
+
+interface CategoryHierarchyTableProps {
+  treemapData: TreemapNode[]
+  selectedCategory: string | null
+  onSelectCategory: (category: string | null) => void
+}
 
 function MetricCard({ label, value, trend, valueColor }: {
   label: string
@@ -122,6 +151,270 @@ function SignalCard({ signal, onDismiss }: { signal: Signal; onDismiss: () => vo
   )
 }
 
+// Helper function to build hierarchical category select options
+function buildCategorySelectOptions(categories: any[]): JSX.Element[] {
+  const parents = categories.filter(c => !c.parent_id).sort((a, b) => a.name.localeCompare(b.name))
+  const result: JSX.Element[] = []
+
+  parents.forEach(parent => {
+    const children = categories.filter(c => c.parent_id === parent.id).sort((a, b) => a.name.localeCompare(b.name))
+
+    if (children.length > 0) {
+      // Parent with children: use SelectGroup with SelectLabel
+      result.push(
+        <SelectGroup key={`group-${parent.id}`}>
+          <SelectLabel>
+            {parent.icon ? `${parent.icon} ` : ''}{parent.name}
+          </SelectLabel>
+          {children.map(child => (
+            <SelectItem key={child.id} value={child.name}>
+              {child.icon ? `  ${child.icon} ` : '  → '}{child.name}
+            </SelectItem>
+          ))}
+        </SelectGroup>
+      )
+    } else {
+      // Parent without children: direct SelectItem
+      result.push(
+        <SelectItem key={parent.id} value={parent.name}>
+          {parent.icon ? `${parent.icon} ` : ''}{parent.name}
+        </SelectItem>
+      )
+    }
+  })
+
+  return result
+}
+
+// Custom renderer for treemap rectangles
+function CustomTreemapContent({
+  x = 0,
+  y = 0,
+  width = 0,
+  height = 0,
+  name = '',
+  value = 0,
+  color = '#3b82f6',
+  depth = 0
+}: CustomTreemapContentProps) {
+  const [isHovered, setIsHovered] = React.useState(false)
+  const isParent = depth === 1
+  const fontSize = isParent ? 14 : 12
+  const fontWeight = isParent ? 600 : 500
+
+  // Only show text if rectangle is large enough
+  const showParentText = isParent && width > 60 && height > 30
+  const showChildText = !isParent && width > 40 && height > 25 && isHovered
+
+  return (
+    <g
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+    >
+      <rect
+        x={x}
+        y={y}
+        width={width}
+        height={height}
+        fill={color}
+        fillOpacity={isParent ? 0.75 : 0.85}
+        stroke="#fff"
+        strokeWidth={2}
+        className="transition-all duration-200 hover:fill-opacity-100"
+        style={{ cursor: 'pointer' }}
+      />
+      {(showParentText || showChildText) && (
+        <>
+          {/* Category name - background shadow */}
+          <text
+            x={x + width / 2}
+            y={y + height / 2 - (isParent && value ? 10 : 0)}
+            textAnchor="middle"
+            fill="#000"
+            fillOpacity={0.5}
+            fontSize={fontSize}
+            fontWeight={fontWeight}
+            dominantBaseline="middle"
+            style={{
+              pointerEvents: 'none'
+            }}
+          >
+            {name}
+          </text>
+          {/* Category name - main text */}
+          <text
+            x={x + width / 2}
+            y={y + height / 2 - (isParent && value ? 10 : 0)}
+            textAnchor="middle"
+            fill="#fff"
+            fontSize={fontSize}
+            fontWeight={fontWeight}
+            dominantBaseline="middle"
+            style={{
+              pointerEvents: 'none',
+              textShadow: '0 0 4px rgba(0,0,0,0.8), 0 0 8px rgba(0,0,0,0.6), 0 2px 4px rgba(0,0,0,0.9)'
+            }}
+          >
+            {name}
+          </text>
+
+          {/* Amount for parent categories */}
+          {isParent && value > 0 && width > 80 && height > 50 && (
+            <>
+              {/* Amount - background shadow */}
+              <text
+                x={x + width / 2}
+                y={y + height / 2 + 12}
+                textAnchor="middle"
+                fill="#000"
+                fillOpacity={0.5}
+                fontSize={11}
+                fontWeight={600}
+                dominantBaseline="middle"
+                style={{
+                  pointerEvents: 'none'
+                }}
+              >
+                {formatAmount(value)}
+              </text>
+              {/* Amount - main text */}
+              <text
+                x={x + width / 2}
+                y={y + height / 2 + 12}
+                textAnchor="middle"
+                fill="#fff"
+                fontSize={11}
+                fontWeight={600}
+                dominantBaseline="middle"
+                style={{
+                  pointerEvents: 'none',
+                  textShadow: '0 0 4px rgba(0,0,0,0.8), 0 0 8px rgba(0,0,0,0.6), 0 2px 4px rgba(0,0,0,0.9)'
+                }}
+              >
+                {formatAmount(value)}
+              </text>
+            </>
+          )}
+        </>
+      )}
+    </g>
+  )
+}
+
+// Hierarchical category table component
+function CategoryHierarchyTable({
+  treemapData,
+  selectedCategory,
+  onSelectCategory
+}: CategoryHierarchyTableProps) {
+  if (treemapData.length === 0) {
+    return (
+      <div className="text-center py-12 text-muted-foreground">
+        <p className="text-sm">No category data available</p>
+      </div>
+    )
+  }
+
+  // Calculate total for percentages
+  const total = treemapData.reduce((sum, node) => {
+    if (node.children) {
+      return sum + node.children.reduce((s, c) => s + (c.size || 0), 0)
+    }
+    return sum + (node.size || 0)
+  }, 0)
+
+  return (
+    <div className="space-y-1 max-h-[400px] overflow-y-auto">
+      {treemapData.map((parent) => {
+        const hasChildren = parent.children && parent.children.length > 0
+        const parentTotal = hasChildren
+          ? parent.children.reduce((s, c) => s + (c.size || 0), 0)
+          : (parent.size || 0)
+
+        return (
+          <div key={parent.name} className="space-y-0.5">
+            {/* Parent Category Row */}
+            {!hasChildren && (
+              <button
+                onClick={() => onSelectCategory(
+                  selectedCategory === parent.name ? null : parent.name
+                )}
+                className={`w-full text-left p-2 rounded-md transition-all flex items-center justify-between group ${
+                  selectedCategory === parent.name
+                    ? 'bg-primary/10 ring-2 ring-primary'
+                    : 'hover:bg-muted/50'
+                }`}
+              >
+                <div className="flex items-center gap-2 min-w-0 flex-1">
+                  <div
+                    className="w-3 h-3 rounded-sm flex-shrink-0"
+                    style={{ backgroundColor: parent.color || '#3b82f6' }}
+                  />
+                  <span className="font-semibold text-sm truncate">
+                    {parent.icon && `${parent.icon} `}
+                    {parent.name}
+                  </span>
+                </div>
+                <span className="text-sm font-semibold text-right ml-2">
+                  {formatAmount(parentTotal)}
+                </span>
+              </button>
+            )}
+
+            {/* Parent header (if has children) */}
+            {hasChildren && (
+              <div className="p-2 bg-muted/30 rounded-md flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div
+                    className="w-3 h-3 rounded-sm"
+                    style={{ backgroundColor: parent.color || '#3b82f6' }}
+                  />
+                  <span className="font-bold text-sm">
+                    {parent.icon && `${parent.icon} `}
+                    {parent.name}
+                  </span>
+                </div>
+                <span className="text-sm font-bold">
+                  {formatAmount(parentTotal)}
+                </span>
+              </div>
+            )}
+
+            {/* Child Categories */}
+            {hasChildren && parent.children?.map((child) => (
+              <button
+                key={child.name}
+                onClick={() => onSelectCategory(
+                  selectedCategory === child.name ? null : child.name
+                )}
+                className={`w-full text-left p-2 pl-8 rounded-md transition-all flex items-center justify-between group ${
+                  selectedCategory === child.name
+                    ? 'bg-primary/10 ring-2 ring-primary'
+                    : 'hover:bg-muted/30'
+                }`}
+              >
+                <div className="flex items-center gap-2 min-w-0 flex-1">
+                  <div
+                    className="w-2 h-2 rounded-sm flex-shrink-0"
+                    style={{ backgroundColor: child.color || '#3b82f6' }}
+                  />
+                  <span className="text-sm truncate">
+                    {child.icon && `${child.icon} `}
+                    {child.name}
+                  </span>
+                </div>
+                <span className="text-sm text-right ml-2">
+                  {formatAmount(child.size || 0)}
+                </span>
+              </button>
+            ))}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 export default function Home() {
   const [dateRange, setDateRange] = useState<DateRange>('last90')
   const [customMonth, setCustomMonth] = useState<string>('')
@@ -136,6 +429,90 @@ export default function Home() {
   const [categoryTransactions, setCategoryTransactions] = useState<any[]>([])
   const [loadingCategory, setLoadingCategory] = useState(false)
   const [loadingCategoryTrend, setLoadingCategoryTrend] = useState(false)
+  const [categories, setCategories] = useState<any[]>([])
+  const [showCategoryPicker, setShowCategoryPicker] = useState(false)
+  const [treemapData, setTreemapData] = useState<TreemapNode[]>([])
+
+  // Helper to get category display name with hierarchy
+  const getCategoryDisplayName = (categoryName: string): string => {
+    const category = categories.find(c => c.name === categoryName)
+    if (!category || !category.parent_id) return categoryName
+
+    const parent = categories.find(c => c.id === category.parent_id)
+    return parent ? `${parent.name} > ${categoryName}` : categoryName
+  }
+
+  // Build hierarchical treemap data from transactions and categories
+  const buildTreemapData = (
+    transactions: any[],
+    categories: any[]
+  ): TreemapNode[] => {
+    // Step 1: Aggregate expenses by category_id
+    const categoryExpenses = new Map<string, number>()
+    transactions
+      .filter(t => t.direction === 'debit' && t.category_id)
+      .forEach(t => {
+        const existing = categoryExpenses.get(t.category_id) || 0
+        categoryExpenses.set(t.category_id, existing + t.amount)
+      })
+
+    // Step 2: Build parent → children map
+    const parentMap = new Map<string, any[]>()
+    categories.forEach(cat => {
+      const parentId = cat.parent_id || 'root'
+      const siblings = parentMap.get(parentId) || []
+      siblings.push(cat)
+      parentMap.set(parentId, siblings)
+    })
+
+    // Step 3: Build treemap nodes
+    const result: TreemapNode[] = []
+    const parents = categories.filter(c => !c.parent_id)
+
+    parents.forEach(parent => {
+      const children = parentMap.get(parent.id) || []
+
+      if (children.length > 0) {
+        // Parent with children: create hierarchical node
+        const childNodes = children
+          .map(child => ({
+            name: child.name,
+            size: categoryExpenses.get(child.id) || 0,
+            color: child.color || '#3b82f6',
+            icon: child.icon
+          }))
+          .filter(node => node.size > 0)
+          .sort((a, b) => b.size - a.size)
+
+        if (childNodes.length > 0) {
+          result.push({
+            name: parent.name,
+            color: parent.color || '#3b82f6',
+            icon: parent.icon,
+            children: childNodes
+          })
+        }
+      } else {
+        // Parent without children: leaf node
+        const size = categoryExpenses.get(parent.id) || 0
+        if (size > 0) {
+          result.push({
+            name: parent.name,
+            size,
+            color: parent.color || '#3b82f6',
+            icon: parent.icon
+          })
+        }
+      }
+    })
+
+    // Sort by total size (parent size or sum of children)
+    return result.sort((a, b) => {
+      const aSize = a.size || a.children?.reduce((sum, c) => sum + (c.size || 0), 0) || 0
+      const bSize = b.size || b.children?.reduce((sum, c) => sum + (c.size || 0), 0) || 0
+      return bSize - aSize
+    })
+  }
 
   // Calculate date range
   const getDateRangeParams = () => {
@@ -259,7 +636,7 @@ export default function Home() {
             color
           }))
           .sort((a, b) => b.expenses_cents - a.expenses_cents)
-          .slice(0, 5)
+          .slice(0, 10)
 
         setTopCategories(topCats)
 
@@ -279,7 +656,7 @@ export default function Home() {
             prev_period_expenses: 0
           }))
           .sort((a, b) => b.expenses_cents - a.expenses_cents)
-          .slice(0, 5)
+          .slice(0, 10)
 
         setTopVendors(topVends)
 
@@ -369,22 +746,25 @@ export default function Home() {
       setLoadingCategory(true)
 
       try {
+        // Get category ID from name
+        const category = categories.find(c => c.name === selectedCategory)
+        if (!category) {
+          setCategoryTransactions([])
+          setLoadingCategory(false)
+          return
+        }
+
         const { data: transactions } = await supabase
           .from('transactions')
           .select('id, date, amount, direction, normalized_vendor, raw_vendor, categories(name)')
+          .eq('category_id', category.id)
           .gte('date', dateParams.start)
           .lte('date', dateParams.end)
           .eq('is_transfer', false)
           .eq('direction', 'debit')
+          .order('date', { ascending: false })
 
-        const filtered = transactions?.filter(t =>
-          (t.categories as any)?.name === selectedCategory
-        ) || []
-
-        // Sort by date descending
-        filtered.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-
-        setCategoryTransactions(filtered)
+        setCategoryTransactions(transactions || [])
       } catch (error) {
         console.error('Error fetching category transactions:', error)
       } finally {
@@ -393,7 +773,7 @@ export default function Home() {
     }
 
     fetchCategoryTransactions()
-  }, [selectedCategory, dateRange, customMonth])
+  }, [selectedCategory, dateRange, customMonth, categories])
 
   // Fetch category trend data when selected
   useEffect(() => {
@@ -406,16 +786,19 @@ export default function Home() {
       setLoadingCategoryTrend(true)
 
       try {
-        // Fetch last 6 months of data for this category
-        const sixMonthsAgo = new Date()
-        sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6)
-        const sixMonthsAgoStr = `${sixMonthsAgo.getFullYear()}-${String(sixMonthsAgo.getMonth() + 1).padStart(2, '0')}-01`
+        // Use the same date range as the transaction list
+        const dateParams = getDateRangeParams()
+
+        // Convert to first day of month for monthly_summary query
+        const startMonth = `${dateParams.start.substring(0, 7)}-01`
+        const endMonth = `${dateParams.end.substring(0, 7)}-01`
 
         const { data: monthlySummary } = await supabase
           .from('monthly_summary')
           .select('month, category_name, expenses_cents')
           .eq('category_name', selectedCategory)
-          .gte('month', sixMonthsAgoStr)
+          .gte('month', startMonth)
+          .lte('month', endMonth)
           .order('month', { ascending: true })
 
         // Group by month
@@ -441,7 +824,46 @@ export default function Home() {
     }
 
     fetchCategoryTrend()
-  }, [selectedCategory])
+  }, [selectedCategory, dateRange, customMonth])
+
+  // Build treemap when categories or date range changes
+  useEffect(() => {
+    const buildTreemap = async () => {
+      if (categories.length === 0) return
+
+      const dateParams = getDateRangeParams()
+      if (!dateParams) return
+
+      const { data: transactions } = await supabase
+        .from('transactions')
+        .select('amount, direction, category_id')
+        .gte('date', dateParams.start)
+        .lte('date', dateParams.end)
+        .eq('is_transfer', false)
+        .eq('direction', 'debit')
+
+      if (transactions) {
+        const treemap = buildTreemapData(transactions, categories)
+        setTreemapData(treemap)
+      }
+    }
+
+    buildTreemap()
+  }, [categories, dateRange, customMonth])
+
+  // Fetch all categories for hierarchy display and picker
+  useEffect(() => {
+    const fetchCategories = async () => {
+      const { data } = await supabase
+        .from('categories')
+        .select('*')
+        .order('name', { ascending: true })
+
+      if (data) setCategories(data)
+    }
+
+    fetchCategories()
+  }, [])
 
   const handleDismissSignal = async (signalId: string, _signalType: string) => {
     // Filter out the signal from display
@@ -524,67 +946,44 @@ export default function Home() {
         />
       </div>
 
-      {/* Top Categories & Top Vendors */}
-      <div className="grid grid-cols-2 gap-6 mb-8">
-        <Card className="hover:shadow-md transition-all duration-200">
+      {/* Spending Breakdown: Treemap + Table */}
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 mb-8">
+        {/* Left: Treemap (60% on large screens) */}
+        <Card className="lg:col-span-3 hover:shadow-md transition-all duration-200">
           <CardContent className="p-6">
             <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-5">
-              Top Categories
+              Visual Breakdown
             </h3>
-            {topCategories.length === 0 ? (
-              <div className="text-center py-8 text-muted-foreground">
-                <p className="text-sm">No category data available</p>
+            {treemapData.length === 0 ? (
+              <div className="text-center py-12 text-muted-foreground">
+                <p className="font-semibold">No spending data available</p>
+                <p className="text-sm mt-2">Upload transactions to see your spending breakdown</p>
               </div>
             ) : (
-              <div className="space-y-3">
-                {topCategories.map((cat) => (
-                  <button
-                    key={cat.name}
-                    onClick={() => setSelectedCategory(selectedCategory === cat.name ? null : cat.name)}
-                    className={`w-full flex items-center justify-between py-2 px-2 rounded transition-colors ${
-                      selectedCategory === cat.name
-                        ? 'bg-primary/10 ring-2 ring-primary'
-                        : 'hover:bg-muted/30'
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <div
-                        className="w-3 h-3 rounded-full"
-                        style={{ backgroundColor: cat.color || '#3b82f6' }}
-                      />
-                      <span className="font-semibold text-sm">{cat.name}</span>
-                    </div>
-                    <span className="font-heading font-bold text-sm">
-                      {formatAmount(cat.expenses_cents)}
-                    </span>
-                  </button>
-                ))}
-              </div>
+              <ResponsiveContainer width="100%" height={400}>
+                <Treemap
+                  data={treemapData}
+                  dataKey="size"
+                  aspectRatio={4 / 3}
+                  stroke="#fff"
+                  content={<CustomTreemapContent />}
+                />
+              </ResponsiveContainer>
             )}
           </CardContent>
         </Card>
 
-        <Card className="hover:shadow-md transition-all duration-200">
+        {/* Right: Hierarchical Table (40% on large screens) */}
+        <Card className="lg:col-span-2 hover:shadow-md transition-all duration-200">
           <CardContent className="p-6">
             <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-5">
-              Top Vendors
+              Category Breakdown
             </h3>
-            {topVendors.length === 0 ? (
-              <div className="text-center py-8 text-muted-foreground">
-                <p className="text-sm">No vendor data available</p>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {topVendors.map((vendor) => (
-                  <div key={vendor.name} className="flex items-center justify-between py-2 hover:bg-muted/30 px-2 rounded transition-colors">
-                    <span className="font-semibold text-sm">{vendor.name}</span>
-                    <span className="font-heading font-bold text-sm">
-                      {formatAmount(vendor.expenses_cents)}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
+            <CategoryHierarchyTable
+              treemapData={treemapData}
+              selectedCategory={selectedCategory}
+              onSelectCategory={setSelectedCategory}
+            />
           </CardContent>
         </Card>
       </div>
@@ -780,6 +1179,43 @@ export default function Home() {
             ))}
           </div>
         </div>
+      )}
+
+      {/* Category Picker Dialog */}
+      {showCategoryPicker && (
+        <Dialog open={showCategoryPicker} onOpenChange={setShowCategoryPicker}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Select Category</DialogTitle>
+            </DialogHeader>
+
+            <div className="space-y-2">
+              <Label>Choose a category to view spending</Label>
+              <Select
+                value=""
+                onValueChange={(value) => {
+                  setSelectedCategory(value)
+                  setShowCategoryPicker(false)
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select category..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {buildCategorySelectOptions(categories)}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <Button
+              variant="outline"
+              onClick={() => setShowCategoryPicker(false)}
+              className="mt-4"
+            >
+              Cancel
+            </Button>
+          </DialogContent>
+        </Dialog>
       )}
     </div>
   )
